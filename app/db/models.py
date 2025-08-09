@@ -138,6 +138,74 @@ class Media(Base):
     # Relationships
     user = relationship("User")
 
+    @classmethod
+    def filter(cls, db, lat=None, lng=None, radius=None, start_date=None, end_date=None):
+        """
+        Filter media records based on geolocation and time range.
+        
+        Args:
+            db: Database session
+            lat: Latitude coordinate for geofence center
+            lng: Longitude coordinate for geofence center
+            radius: Radius in meters for geofence
+            start_date: Start date and time for filtering (inclusive)
+            end_date: End date and time for filtering (inclusive)
+            
+        Returns:
+            Query object with applied filters
+        """
+        query = db.query(cls)
+        
+        # Apply geofence filter if all location parameters are provided
+        if lat is not None and lng is not None and radius is not None:
+            # Using a simple distance calculation for filtering
+            # This is a basic implementation - in production, consider using PostGIS
+            from math import radians, cos, sin, asin, sqrt
+            
+            # Convert radius from meters to degrees approximately
+            # This is a rough approximation - 1 degree ≈ 111km
+            lat_rad = radians(lat)
+            radius_deg = radius / 111_000
+            
+            # Apply bounding box filter first for efficiency
+            lat_range = radius_deg
+            lng_range = radius_deg / cos(lat_rad)
+            
+            query = query.filter(
+                cls.lat >= lat - lat_range,
+                cls.lat <= lat + lat_range,
+                cls.lng >= lng - lng_range,
+                cls.lng <= lng + lng_range
+            )
+            
+            # Add Haversine formula for accurate distance calculation
+            # Haversine formula: a = sin²(Δφ/2) + cos φ1 ⋅ cos φ2 ⋅ sin²(Δλ/2)
+            #                   c = 2 ⋅ atan2( √a, √(1−a) )
+            #                   d = R ⋅ c
+            lat1 = radians(lat)
+            lng1 = radians(lng)
+            
+            # Convert coordinates to radians and calculate distance
+            query = query.filter(
+                2 * 6371000 * 
+                func.asin(
+                    func.sqrt(
+                        func.power(func.sin((func.radians(cls.lat) - lat1) / 2), 2) +
+                        func.cos(lat1) * func.cos(func.radians(cls.lat)) *
+                        func.power(func.sin((func.radians(cls.lng) - lng1) / 2), 2)
+                    )
+                ) <= radius
+            )
+        
+        # Apply time range filters
+        if start_date is not None:
+            query = query.filter(cls.capture_time >= start_date)
+            
+        if end_date is not None:
+            query = query.filter(cls.capture_time <= end_date)
+            
+        return query
+
 class Comment(Base):
     __tablename__ = 'comments'
 
