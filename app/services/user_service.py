@@ -81,6 +81,33 @@ class UserService:
             logger.error(f"Error creating user: {e}")
             raise
 
+    def delete_user(self, user_id: int) -> User:
+        """Soft delete a user by deactivating their account.
+        
+        Args:
+            user_id: The unique ID of the user to delete.
+            
+        Returns:
+            The updated User object with is_active=False
+        
+        Raises:
+            ValueError: If user with the given ID is not found
+            Exception: For database errors during operation
+        """
+        try:
+            user = self.db.query(User).filter(User.id == user_id).first()
+            if not user:
+                raise ValueError(f"User with id {user_id} not found")
+            user.is_active = False
+            self.db.commit()
+            self.db.refresh(user)
+            logger.info(f"User account deleted (deactivated): {user_id}")
+            return user
+        except Exception as e:
+            self.db.rollback()
+            logger.error(f"Error deleting user account {user_id}: {str(e)}")
+            raise
+    
     def close(self):
         """Close the database session if it was created internally."""
         if self.db and not hasattr(self.db, 'external'):
