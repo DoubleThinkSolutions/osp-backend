@@ -7,7 +7,7 @@ from sqlalchemy import pool
 from sqlalchemy.exc import OperationalError, ProgrammingError, IntegrityError, DataError
 
 from alembic import context
-from app.utils.logger import logger
+from app.core.logging import logger
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
