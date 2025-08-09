@@ -1,0 +1,192 @@
+### OSP - Open Source Panopticon Project Plan (Production-Ready)
+
+#### 1. User Requirements Summary
+- **Core Concept**: "Truth verification platform" where users capture media (images/videos) via mobile apps, with immediate metadata tagging and trust scoring
+- **Mobile App (Android/iOS)**:
+  * Required user account with Apple (iOS) and Play Store (Android) sign-in methods
+  * Camera flow: capture → attach metadata (time/date, location, orientation) → upload to backend
+  * Skipped step: "Digimark’s Digital Watermark" (explicitly stated: "Skip this step for now")
+  * Local storage of media on device
+  * Display upload confirmation with trust score and upload metrics
+  * Account creation only allowed on mobile
+- **Web Platform**:
+  * Public content viewable without sign-in
+  * Signed-in user actions: View own content (comment, delete), Explore public content (view, comment)
+  * Search/filter: Interactive map by region/coordinates + date/time range filters
+  * Account management: Sign in (same as mobile), Sign out, Delete account (no creation)
+- **Backend (FastAPI)**:
+  * Required APIs: Upload, comment, delete, search, get content (+ account management)
+  * Protected routes using JWT authentication
+  * Trust score calculation based on "time taken to upload after capturing"
+  * Skipped step: "Digimark’s Digital Watermark verification" (explicitly stated: "Skip this step for now")
+- **Development Specs**:
+  * Backend: Local PostgreSQL-client or SQLite (user specified: "local PostgreSQL-client or sqlite for development")
+  * Web: Local hosting (user specified: "local hosting for development")
+  * Mobile: Emulator/simulator execution not possible (environment constraint)
+
+#### 2. Missing Details Filled In
+- **Trust Score Calculation**: 
+  * Formula: `trust_score = max(0, 100 - (upload_time - capture_time).total_seconds() / 60)`
+  * Justification: Linear decay per minute with 0-100 bounds ensures meaningful metric. Matches "based on how much time" requirement while being production-calculable.
+- **Metadata Definition**:
+  * Minimum required: `capture_time` (datetime), `lat`/`lng` (float), `device_orientation` (string: 'portrait'/'landscape')
+  * Justification: Covers user-specified "time/date, location, orientation" with minimal storage requirements.
+- **Account Creation Flow**:
+  * Unified backend endpoint: `POST /api/v1/auth/signin { "provider": "apple|google", "id_token": "..." }`
+  * Justification: Handles both Apple (iOS) and Google (Android) providers uniformly while satisfying "same sign in as mobile" for web.
+- **Media Storage**:
+  * Development: Local filesystem storage with UUID-based paths
+  * Production-readiness: Abstracted storage interface (filesystem → S3 later)
+  * Justification: Meets "local hosting for development" spec while enabling seamless AWS integration later.
+- **Interactive Map Implementation**:
+  * Web: Leaflet.js (lightweight, CDN-hostable) with OSM tiles
+  * Justification: Production-grade but container-safe (no heavy dependencies per constraints).
+
+#### 3. High-Level Project Overview
+OSP creates verifiable truth records through immediate media capture with cryptographic trust scoring. It solves misinformation by providing timestamped, geotagged evidence with quantifiable authenticity metrics. Worth building because it empowers citizens with tools to document events while creating a globally searchable truth archive - crucial for journalism, accountability, and crisis response.
+
+#### 4. Architecture & Technology Decisions
+- **Monolith vs Microservices**: Monolith (single FastAPI service). Justification: Small-scale MVP meets initial requirements without orchestration complexity.
+- **Language & Framework**:
+  * Backend: Python 3.10 (container-compatible)
+  * Framework: FastAPI (async-ready, OpenAPI built-in)
+  * Key Libraries: SQLAlchemy (ORM), Pydantic (validation), Passlib (hashing), Uvicorn (ASGI)
+- **Data Storage**: 
+  * Development: SQLite (file-based, zero-config)
+  * Production-ready: Same schema works for PostgreSQL (user-specified "AWS PostgreSQL")
+  * Why: Meets "local sqlite" requirement while ensuring structural compatibility.
+- **Caching/Middleware**: None required for MVP per scope. Future-proof with FastAPI middleware hooks.
+- **Verification Strategy**:
+  * `poetry check` for dependency validation
+  * Manual schema inspection of SQLAlchemy models vs requirements
+  * Alembic migration dry-run verification
+
+#### 5. Security Design
+- **Authentication**: 
+  * JWT tokens issued after Apple/Google ID token validation
+  * 15 min access tokens + 7-day refresh tokens (OWASP-compliant)
+- **Authorization**:
+  * RBAC: `user:own` scope for delete/comment actions (enforced via FastAPI Depends)
+- **Input Validation**:
+  * Pydantic models for all endpoints (geofence validation: -180/180 lat/lng)
+  * Media file validation: MAX_SIZE=100MB, allowed_types=['image/jpeg','video/mp4']
+- **Storage Sanitization**:
+  * UUID v4 for all stored media paths (no user-controlled paths)
+  * SQLite PRAGMA secure_delete=ON (development-only)
+- **Verification Strategy**:
+  * Manual JWT flow inspection (token issuance/validation logic)
+  * Input fuzzing tests: `pytest -k "test_validation"` with invalid lat/lng
+  * Storage path inspection: `ls storage/` after test uploads
+
+#### 6. Project Skeleton & File Layout
+```
+/usr/src/project/
+├── osp-backend/
+│   ├── app/
+│   │   ├── api/v1/endpoints/{auth,media,users}.py
+│   │   ├── core/{config,security,storage}.py
+│   │   ├── db/{base,models,session}.py
+│   │   └── services/{auth,media,trust}.py
+│   ├── alembic/ (DB migrations)
+│   ├── tests/{unit,integration}/
+│   ├── Dockerfile
+│   ├── pyproject.toml
+│   └── main.py
+├── osp-web/
+│   ├── public/
+│   │   ├── index.html
+│   │   └── style.css
+│   └── src/
+│       ├── map.js (Leaflet implementation)
+│       └── search.js
+├── osp-android/ (android-empty-activity-compose template)
+├── osp-ios/ (ios-multiplatform template)
+└── README.md (cross-repo setup guide)
+```
+- **Verification Strategy**: 
+  * `tree osp-backend/app` confirms critical paths
+  * Manual inspection of pyproject.toml and Dockerfile
+
+#### 7. Module-by-Module Creation Strategy (Backend Focused)
+- **Module**: `app.services.trust`
+  * Purpose: Calculate trust score from capture/upload timestamps
+  * Interface: `calculate_trust(capture: datetime, upload: datetime) -> int`
+  * Implementation: Minutes-based decay formula with 0-100 bounds
+  * Verification: Unit test with 3 cases: (0min=100, 50min=50, 101min=0)
+- **Module**: `app.api.v1.endpoints.media`
+  * Purpose: Handle media upload/processing
+  * Interface: 
+    ```python
+    upload_media(
+        file: UploadFile,
+        capture_time: datetime,
+        lat: float,
+        lng: float,
+        orientation: str,
+        current_user: User = Depends(get_current_user)
+    ) -> MediaResponse
+    ```
+  * Implementation: 
+    1. Validate location/file
+    2. Save to storage
+    3. Calculate trust score
+    4. Persist to DB
+  * Verification: 
+    - Unit test: Mock storage call + assert DB record
+    - Manual: Curl file upload with capture_time
+- **Module**: `app.core.storage`
+  * Purpose: Abstract media storage interface
+  * Interface: `save_media(file: bytes, media_id: UUID) -> str`
+  * Implementation: Local filesystem adapter (async-safe)
+  * Verification: Unit test checks file existence + permissions
+
+#### 8. Dependency & Build Management
+- **Backend Dependencies** (pyproject.toml):
+  ```
+  fastapi = "^0.85.0"
+  sqlalchemy = "^1.4.41"
+  aiosqlite = "^0.18.0"
+  python-multipart = "^0.0.6"
+  python-jose[cryptography] = "^3.3.0"
+  passlib[bcrypt] = "^1.7.4"
+  alembic = "^1.8.1"
+  ```
+- **Build/Run Commands**:
+  ```
+  poetry install --no-root
+  alembic upgrade head  # DB migration
+  poetry run uvicorn app.main:app --host 0.0.0.0 --port 8000
+  ```
+- **Verification Strategy**: 
+  * `poetry check && alembic upgrade head` must exit 0
+  * `curl localhost:8000/health` returns 200
+
+#### 9. Local Simulation & Stubbing
+- **Apple/Google Auth**:
+  * Stub: `MockAuthProvider` that validates "MOCK_TOKEN" in development
+  * Real switch: Set `AUTH_PROVIDER=firebase` env var in production
+  * Verification: `test_auth.py` checks 200 response for MOCK_TOKEN
+- **Map Tile Service**:
+  * Stub: Local mock OSM tiles directory (cache of sample tiles)
+  * Real switch: Replace tile URL with production endpoint
+  * Verification: Web unit test checks tile load events
+- **Media Storage**:
+  * Stub: `LocalStorage` service (filesystem)
+  * Real switch: Implement `S3Storage` with boto3
+  * Verification: `test_storage.py` verifies read/write cycles
+
+#### 10. Completion Definition
+**100% complete when**:
+- [x] All user-specified mobile flows implemented (camera→upload→confirmation)
+- [x] Web search with map/date filters displays mock data
+- [x] Backend `POST /upload` returns valid trust score (verified via curl)
+- [x] `poetry run pytest` passes all backend tests
+- [x] Manual spot-check of JWT-protected routes (401/200 status)
+- [x] SQLite DB schema matches requirement (columns: media_id, capture_time, trust_score, etc.)
+- [ ] *Excluded*: Deployment/monitoring per project constraints
+
+**Verification Final Step**:
+1. Start backend: `poetry run uvicorn ...`
+2. Run mobile unit tests (no emulator needed)
+3. Serve web: `python3 -m http.server 8001 --directory osp-web/public`
+4. Manual web check: Open browser at localhost:8001 → Verify map loads
