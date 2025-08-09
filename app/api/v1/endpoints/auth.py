@@ -6,13 +6,88 @@ from app.services.auth.apple_auth import verify_apple_id_token
 from app.services.auth.google_auth import GoogleAuth
 from app.models.auth import SignInRequest, SignInResponse
 from app.services.user_service import UserService
-from app.core.security import create_access_token, create_refresh_token
+from app.core.security import create_access_token, create_refresh_token, decode_token, verify_refresh_token
 from app.db.session import get_db
 from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+@router.post("/refresh-token", response_model=Dict[str, str])
+async def refresh_token(
+    refresh_token_body: Dict[str, str],
+    db: Session = Depends(get_db)
+):
+    """
+    Refresh an access token using a valid refresh token.
+
+    Args:
+        refresh_token_body: Dictionary containing the refresh token
+        db: Database session
+
+    Returns:
+        Dictionary containing the new access token
+
+    Raises:
+        HTTPException: 403 for invalid or expired refresh tokens
+    """
+    refresh_token_str = refresh_token_body.get("refreshToken")
+    if not refresh_token_str:
+        logger.warning("Refresh token missing from request body")
+        raise HTTPException(
+            status_code=403,
+            detail={"error": "REFRESH_TOKEN_INVALID"}
+        )
+
+    # Verify the refresh token
+    try:
+        token_payload = verify_refresh_token(refresh_token_str)
+        if not token_payload:
+            logger.warning("Invalid or expired refresh token provided")
+            raise HTTPException(
+                status_code=403,
+                detail={"error": "REFRESH_TOKEN_INVALID"}
+            )
+        
+        user_id = token_payload.get("userId")
+        provider = token_payload.get("provider")
+        roles = token_payload.get("roles", ["user"])
+        
+        logger.info(f'Refresh token request received for user: {user_id}')
+        
+        # Check if user still exists and is active
+        user_service = UserService(db)
+        user = user_service.find_user_by_provider_id(provider, user_id)
+        user_service.close()
+
+        if not user or user.is_deleted:
+            logger.warning(f"User not found or deleted for refresh token request: {user_id}")
+            raise HTTPException(
+                status_code=403,
+                detail={"error": "REFRESH_TOKEN_INVALID"}
+            )
+        
+        # Generate new access token
+        new_access_token = create_access_token(
+            user_id=user_id,
+            provider=provider,
+            roles=roles,
+            expires_in=900  # 15 minutes
+        )
+        
+        logger.info(f"Access token refreshed for user: {user_id}")
+        
+        return {"accessToken": new_access_token}
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected error during token refresh: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail="An unexpected error occurred during token refresh"
+        )
 
 @router.post("/signin", response_model=SignInResponse)
 async def signin(
@@ -67,6 +142,7 @@ async def signin(
         # If user exists, check if account is in deletion state
         if user:
             if user.is_deleted:
+                logger.warning(f"Deletion in progress for user {user.id} attempting sign-in")
                 raise HTTPException(
                     status_code=403,
                     detail="DELETION_IN_PROGRESS"
@@ -78,11 +154,13 @@ async def signin(
                 if existing_user:
                     # Check if this existing user is already being deleted
                     if existing_user.is_deleted:
+                        logger.warning(f"Deletion in progress for user {existing_user.id} with email {user_info['email']} during sign-in")
                         raise HTTPException(
                             status_code=403,
                             detail="DELETION_IN_PROGRESS"
                         )
                     # Otherwise, the email is already associated with another account
+                    logger.warning(f"Sign-in attempt with existing email {user_info['email']} but different provider ID")
                     raise HTTPException(
                         status_code=403,
                         detail="ACCOUNT_EXISTS"
@@ -106,21 +184,22 @@ async def signin(
         # Close the UserService session
         user_service.close()
 
-        # Create JWT token
+        # Create JWT token using provider_id (external ID) instead of internal DB ID
         access_token = create_access_token(
-            user_id=str(user.id),
+            user_id=user_info['provider_id'],
             provider=request.provider,
             roles=["user"],
             expires_in=900  # 15 minutes in seconds
         )
         refresh_token = create_refresh_token(
-            user_id=str(user.id),
+            user_id=user_info['provider_id'],
             provider=request.provider,
             roles=["user"],
             expires_in=604800  # 7 days in seconds
         )
         
-        logger.info(f"Successful {request.provider} sign-in for user {user.id}")\n        return SignInResponse(
+        logger.info(f"Successful {request.provider} sign-in for user {user.id}")
+        return SignInResponse(
             access_token=access_token,
             refresh_token=refresh_token,
             token_type="bearer"
