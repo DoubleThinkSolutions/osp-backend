@@ -1,0 +1,93 @@
+# OS-Level files
+.DS_Store
+Thumbs.db
+
+# Python build/cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Poetry
+poetry.lock
+.venv/
+
+# IDE / Editor files
+.idea/
+.vscode/
+*.sublime-project
+*.sublime-workspace
+
+# Backend specific
+# Database files (SQLite)
+*.db
+*.db-journal
+*.sqlite
+*.sqlite-journal
+
+# Docker
+Dockerfile
+docker-compose.yml
+docker-compose.override.yml
+docker/
+.dockerignore
+
+# Local development overrides
+# This is generally for backend config.prod.yaml, etc.
+# DO NOT commit environment-specific secrets or configurations.
+# Consider a config management system or secure secrets handling for production.
+secrets.yaml
+config.prod.yaml
+.env
+
+# Static files for web (if not generated or managed by build process)
+# osp-web/public/ - Assuming this is the output directory
+
+# Temporary files
+*.tmp
+.tmp/
+
+# Logs
+*.log
+logs/
+
+# Test artifacts
+.pytest_cache/
+htmlcov/
+coverage/
+report.xml
+
+# Compiled extension modules
+*.so
+*.dylib
+
+# Media files generated during development or testing that shouldn't be committed
+# Example: If a test creates dummy media files
+media_storage_uploads_test_dir/
+storage/  # If this directory is used for temporary local storage during development
+
+# OS-specific temporary files for build systems like Emacs or Vim
+*~
+!.gitignore
+
+# Python package resource directories not needed in repo
+*.dist-info/
