@@ -17,11 +17,14 @@ aiofiles = "^23.1.0"
 python-dotenv = "^1.0.0"
 asyncpg = "^0.27.0"
 psycopg2-binary = "^2.9.0"
-pydantic-settings = "^2.0.0"
+
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^7.0.0"
 httpx = "^0.23.0"
+
+[tool.poetry.scripts]
+test = "poetry run alembic upgrade head && pytest"
 
 [build-system]
 requires = ["poetry-core"]
