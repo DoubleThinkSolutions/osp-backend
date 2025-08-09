@@ -1,4 +1,4 @@
-from pydantic import BaseSettings
+from pydantic_settings import BaseSettings
 from typing import Optional
 
 class Settings(BaseSettings):
@@ -8,9 +8,11 @@ class Settings(BaseSettings):
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 15
     REFRESH_TOKEN_EXPIRE_DAYS: int = 7
     DEBUG: bool = True
+    AUTH_PROVIDER: Optional[str] = None
     
     class Config:
         env_file = ".env"
         case_sensitive = True
+        extra = "allow"
 
 settings = Settings()

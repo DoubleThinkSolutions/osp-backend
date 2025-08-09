@@ -5,9 +5,9 @@ from typing import Optional
 import logging
 import os
 
-from app.core.dependencies import get_current_user
+from app.security.jwt import get_current_user
 from app.core.logging import logger
-from app.models.media import MediaCreateRequest
+from app.models.media import MediaCreateRequest, MediaFilterParams
 from app.services.storage import save_file
 
 router = APIRouter()
@@ -167,6 +167,88 @@ async def create_media(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to save media metadata"
+        )
+    finally:
+        db.close()
+
+
+@router.get("/api/v1/media")
+async def get_media(
+    filters: MediaFilterParams = Depends(),
+    current_user = Depends(get_current_user),
+    logger: logging.Logger = logger
+):
+    """
+    Retrieve media items with optional filtering by geolocation and time range.
+    """
+    # Extract user_id from current_user
+    user_id = current_user.id
+    
+    # Log incoming request
+    logger.info(
+        f"User {user_id} requesting media with filters: "
+        f"lat={filters.lat}, lng={filters.lng}, radius={filters.radius}, "
+        f"start_date={filters.start_date}, end_date={filters.end_date}"
+    )
+    
+    # Import Media model and database session
+    from app.db.models import Media
+    from app.db.session import SessionLocal
+    
+    # Create a database session
+    db = SessionLocal()
+    try:
+        # Extract filter parameters
+        lat = filters.lat
+        lng = filters.lng
+        radius = filters.radius
+        start_date = filters.start_date
+        end_date = filters.end_date
+        
+        # Log database query attempt
+        logger.info("Attempting to query media records with provided filters")
+        
+        # Use the Media.filter() method to apply filters
+        query = Media.filter(
+            db=db,
+            lat=lat,
+            lng=lng,
+            radius=radius,
+            start_date=start_date,
+            end_date=end_date
+        )
+        
+        # Execute the query and get results
+        media_list = query.all()
+        
+        # Log the number of results found
+        logger.info(f"Successfully retrieved {len(media_list)} media records")
+        
+        # Convert results to response format
+        response_media = []
+        for media in media_list:
+            response_media.append({
+                "id": media.id,
+                "capture_time": media.capture_time.isoformat(),
+                "lat": media.lat,
+                "lng": media.lng,
+                "orientation": media.orientation,
+                "trust_score": media.trust_score,
+                "user_id": media.user_id,
+                "file_path": media.file_path
+            })
+        
+        # Return the filtered media list with count
+        return {
+            "media": response_media,
+            "count": len(response_media)
+        }
+        
+    except Exception as e:
+        logger.error(f"Failed to retrieve media records: {str(e)}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to retrieve media records"
         )
     finally:
         db.close()
