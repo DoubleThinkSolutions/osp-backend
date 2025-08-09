@@ -3,7 +3,7 @@ import os
 from typing import Dict, Any, Optional
 from datetime import datetime, timedelta
 from jose import jwt
-from jose.exceptions import JWTError
+from jose.exceptions import JWTError, ExpiredSignatureError
 import logging
 
 logger = logging.getLogger(__name__)
@@ -98,7 +98,7 @@ def create_refresh_token(
         logger.error(f"Failed to create refresh token: {str(e)}")
         raise
 
-def decode_token(token: str) -> Optional[Dict[str, Any]]:
+def decode_token(token: str) -> Dict[str, Any]:
     """
     Decode and verify a JWT token.
     
@@ -106,15 +106,47 @@ def decode_token(token: str) -> Optional[Dict[str, Any]]:
         token: The JWT token to decode
         
     Returns:
-        Dictionary with token claims if valid, None if invalid
+        Dictionary with 'success': True and token claims if valid,
+        or 'success': False with 'error': 'TOKEN_EXPIRED' or 'INVALID_TOKEN'
     """
     try:
         decoded_token = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         logger.info(f"Successfully decoded token for user {decoded_token.get('userId')}")
-        return decoded_token
+        return {"success": True, "payload": decoded_token}
+    except ExpiredSignatureError:
+        logger.warning(f"Token expired during decoding")
+        return {"success": False, "error": "TOKEN_EXPIRED"}
     except JWTError as e:
-        logger.warning(f"Token decoding failed: {str(e)}")
-        return None
+        logger.warning(f"Token decoding failed due to invalid signature or other JWT error: {str(e)}")
+        return {"success": False, "error": "INVALID_TOKEN"}
     except Exception as e:
         logger.error(f"Unexpected error during token decoding: {str(e)}")
+        return {"success": False, "error": "INVALID_TOKEN"}
+
+
+def verify_refresh_token(token: str) -> Optional[Dict[str, Any]]:
+    """
+    Verify a refresh token and return its payload if valid.
+    
+    Args:
+        token: The refresh JWT token to verify
+        
+    Returns:
+        Dictionary with token claims if valid, None if invalid or expired
+    """
+    try:
+        decoded_token = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        
+        # Ensure it's actually a refresh token
+        if decoded_token.get("type") != "refresh":
+            logger.warning("Token is not a refresh token")
+            return None
+            
+        logger.info(f"Refresh token verified for user {decoded_token.get('userId')}")
+        return decoded_token
+    except JWTError as e:
+        logger.warning(f"Refresh token verification failed: {str(e)}")
+        return None
+    except Exception as e:
+        logger.error(f"Unexpected error during refresh token verification: {str(e)}")
         return None
