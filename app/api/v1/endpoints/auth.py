@@ -11,7 +11,7 @@ from app.db.session import get_db
 from sqlalchemy.orm import Session
 import json
 from fastapi import Depends, HTTPException, Response, status, APIRouter
-from app.db.models import User, UserDeletionStatus
+from app.db.models import User
 from app.db.session import get_db
 from sqlalchemy.orm import Session
 from datetime import timedelta
