@@ -150,3 +150,5 @@ def verify_refresh_token(token: str) -> Optional[Dict[str, Any]]:
     except Exception as e:
         logger.error(f"Unexpected error during refresh token verification: {str(e)}")
         return None
+
+# Removed get_current_user function as it's now in app/middleware/auth.py

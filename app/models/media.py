@@ -2,7 +2,7 @@ from datetime import datetime
 from typing import Optional
 
 from fastapi import UploadFile
-from pydantic import BaseModel, Field, validator, root_validator
+from pydantic import BaseModel, Field, validator, model_validator
 
 
 class MediaCreateRequest(BaseModel):
@@ -26,7 +26,8 @@ class MediaFilterParams(BaseModel):
     start_date: Optional[datetime] = Field(None, description="Start date and time in ISO 8601 format")
     end_date: Optional[datetime] = Field(None, description="End date and time in ISO 8601 format")
 
-    @root_validator()
+    @model_validator(mode='before')
+    @classmethod
     def validate_location_fields(cls, values):
         lat, lng, radius = values.get("lat"), values.get("lng"), values.get("radius")
         if lat is not None:

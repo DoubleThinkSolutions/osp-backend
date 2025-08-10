@@ -175,8 +175,7 @@ async def create_media(
 @router.get("/api/v1/media")
 async def get_media(
     filters: MediaFilterParams = Depends(),
-    current_user = Depends(get_current_user),
-    logger: logging.Logger = logger
+    current_user = Depends(get_current_user)
 ):
     """
     Retrieve media items with optional filtering by geolocation and time range.
