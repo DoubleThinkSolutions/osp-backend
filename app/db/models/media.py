@@ -11,22 +11,45 @@ class Media(Base):
     created_at = Column(DateTime, default=func.now())
 
     @classmethod
-    def filter(cls, session, **kwargs):
+    def filter(cls, session, lat=None, lng=None, radius=None, start_date=None, end_date=None):
         """
-        Filter Media instances based on provided parameters.
+        Filter Media instances based on geolocation (with radius in meters) and optional time range.
     
         Parameters:
         - session: SQLAlchemy session object
-        - kwargs: filter criteria
+        - lat (float): Latitude of the center point
+        - lng (float): Longitude of the center point
+        - radius (float): Radius in meters
+        - start_date (datetime): Start of the time range (optional)
+        - end_date (datetime): End of the time range (optional)
     
         Returns:
-        - List of Media instances matching the criteria
+        - SQLAlchemy query object for Media instances matching the criteria
         """
+        from sqlalchemy import and_, text, Column
+    
         query = session.query(cls)
-        for key, value in kwargs.items():
-            if hasattr(cls, key):
-                query = query.filter(getattr(cls, key) == value)
-        return query.all()
+    
+        # Apply geofence filtering if all location parameters are provided
+        if lat is not None and lng is not None and radius is not None:
+            # Using raw SQL fragment for Haversine distance formula
+            # Distance in meters
+            haversine_expr = text("""
+                6371000 * 2 * asin(sqrt(
+                    power(sin(radians(:lat - lat) / 2), 2) +
+                    cos(radians(:lat)) * cos(radians(lat)) *
+                    power(sin(radians(:lng - lng) / 2), 2)
+                ))
+            """)
+            query = query.filter(haversine_expr < radius).params(lat=lat, lng=lng)
+    
+        # Apply time range filtering
+        if start_date is not None:
+            query = query.filter(cls.capture_time >= start_date)
+        if end_date is not None:
+            query = query.filter(cls.capture_time <= end_date)
+    
+        return query
     
     @classmethod
     def delete(cls, session, media_id: str) -> bool:
