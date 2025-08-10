@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, Form, File, UploadFile, HTTPException, status
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from datetime import datetime, timezone
 from typing import Optional
 import logging
@@ -9,6 +9,8 @@ from app.security.jwt import get_current_user
 from app.core.logging import logger
 from app.models.media import MediaCreateRequest, MediaFilterParams
 from app.services.storage import save_file
+from app.db.models.media import Media
+from app.db.session import SessionLocal
 
 router = APIRouter()
 
@@ -248,6 +250,53 @@ async def get_media(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to retrieve media records"
+        )
+    finally:
+        db.close()
+
+
+@router.delete("/api/v1/media/{media_id}")
+async def delete_media(
+    media_id: str,
+    current_user = Depends(get_current_user)
+):
+    """
+    Delete a media item by ID.
+    Only the owner of the media item or an admin can delete it.
+    """
+    # Log the start of the deletion attempt
+    logger.info(f"User {current_user.id} attempting to delete media {media_id}")
+    
+    db = SessionLocal()
+    try:
+        # Get the media record first to check ownership
+        media = db.query(Media).filter(Media.id == media_id).first()
+        if not media:
+            logger.warning(f"Media {media_id} not found for deletion")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Media not found"
+            )
+        
+        # Check if the current user is the owner or an admin
+        if media.user_id != current_user.id and not current_user.is_superuser:
+            logger.warning(f"User {current_user.id} attempted to delete media {media_id} without permission")
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You do not have permission to delete this media"
+            )
+        
+        # Proceed with deletion after permission check (handled at endpoint level)
+        Media.delete(session=db, media_id=media_id)
+        
+        logger.info(f"Successfully deleted media {media_id}")
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+        
+    except Exception as e:
+        logger.error(f"Unexpected error while deleting media {media_id}: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to delete media"
         )
     finally:
         db.close()

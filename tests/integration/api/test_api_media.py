@@ -41,6 +41,11 @@ class TestMediaUpload:
             yield mock
 
     @pytest.fixture
+    def mock_storage_delete(self):
+        with patch("app.api.v1.endpoints.media.delete_file") as mock:
+            yield mock
+
+    @pytest.fixture
     def authenticated_client(self):
         # Mock authentication - bypass real auth
         with patch("app.api.v1.endpoints.media.get_current_user") as mock:
@@ -255,3 +260,113 @@ class TestMediaUpload:
         final_call_args = mock_media_create.call_args[1]
         final_filename = final_call_args['file_path']
         assert final_filename.endswith(".jpg")
+
+    def test_successful_deletion(self, authenticated_client, mock_storage_save, mock_media_create, mock_storage_delete):
+        # Upload a new media item
+        file_content = b"fake jpeg content"
+        files = {"file": ("test.jpg", file_content, "image/jpeg")}
+        data = {
+            "capture_time": (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat(),
+            "lat": 40.7128,
+            "lng": -74.0060,
+            "orientation": 90
+        }
+
+        response = authenticated_client.post("/api/v1/media", files=files, data=data)
+        assert response.status_code == 201
+        media_id = response.json()["id"]
+        file_path = response.json()["file_path"]
+
+        # Delete the media
+        response = authenticated_client.delete(f"/api/v1/media/{media_id}")
+
+        # Checks
+        assert response.status_code == 204
+        assert not response.text  # No content
+
+        # Check database state
+        assert Media.query.get(media_id) is None
+
+        # Check filesystem state
+        mock_storage_delete.assert_called_once_with(file_path)
+
+    def test_deletion_empty_file_path(self, authenticated_client, mock_storage_save, mock_media_create, mock_storage_delete):
+        # Mock Media.create to return empty file_path
+        mock_media_create.return_value = Media(
+            id=1,
+            capture_time=datetime.now(timezone.utc),
+            lat=40.7128,
+            lng=-74.0060,
+            orientation=0,
+            trust_score=95,
+            user_id=1,
+            file_path=""  # Empty file_path
+        )
+
+        # Upload media
+        file_content = b"fake"
+        files = {"file": ("test.jpg", file_content, "image/jpeg")}
+        data = {
+            "capture_time": (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat(),
+            "lat": 40.7128,
+            "lng": -74.0060
+        }
+        response = authenticated_client.post("/api/v1/media", files=files, data=data)
+        assert response.status_code == 201
+        media_id = response.json()["id"]
+
+        # Delete media
+        response = authenticated_client.delete(f"/api/v1/media/{media_id}")
+        assert response.status_code == 204
+
+        # Check database state
+        assert Media.query.get(media_id) is None
+
+        # Check storage deletion not called
+        mock_storage_delete.assert_not_called()
+
+    def test_deletion_nonexistent_id(self, authenticated_client):
+        response = authenticated_client.delete("/api/v1/media/9999")
+        assert response.status_code == 404
+        assert "not found" in response.json()["detail"].lower()
+
+    def test_deletion_unauthorized(self, client):
+        # Create media as user 1
+        with patch("app.api.v1.endpoints.media.get_current_user", return_value=MagicMock(id=1)):
+            files = {"file": ("test.jpg", b"fake", "image/jpeg")}
+            data = {
+                "capture_time": datetime.now(timezone.utc).isoformat(),
+                "lat": 40.7128,
+                "lng": -74.0060
+            }
+            response = client.post("/api/v1/media", files=files, data=data)
+            assert response.status_code == 201
+            media_id = response.json()["id"]
+
+        # Try deleting as user 2
+        with patch("app.api.v1.endpoints.media.get_current_user", return_value=MagicMock(id=2)):
+            response = client.delete(f"/api/v1/media/{media_id}")
+            assert response.status_code == 403
+
+    def test_deletion_storage_failure(self, authenticated_client, mock_storage_save, mock_media_create):
+        # Upload media first
+        file_content = b"fake"
+        files = {"file": ("test.jpg", file_content, "image/jpeg")}
+        data = {
+            "capture_time": (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat(),
+            "lat": 40.7128,
+            "lng": -74.0060
+        }
+        response = authenticated_client.post("/api/v1/media", files=files, data=data)
+        assert response.status_code == 201
+        media_id = response.json()["id"]
+        file_path = response.json()["file_path"]
+
+        # Mock storage delete to fail
+        with patch("app.api.v1.endpoints.media.delete_file", side_effect=Exception("Storage error")):
+            response = authenticated_client.delete(f"/api/v1/media/{media_id}")
+            assert response.status_code == 500
+            assert "internal server error" in response.json()["detail"].lower()
+
+        # Check database state remains
+        assert Media.query.get(media_id) is not None
