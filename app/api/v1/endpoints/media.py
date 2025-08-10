@@ -7,10 +7,11 @@ import os
 
 from app.security.jwt import get_current_user
 from app.core.logging import logger
-from app.models.media import MediaCreateRequest, MediaFilterParams
+from src.schemas.media import MediaFilterParams
+from app.models.media import MediaCreateRequest
 from app.services.storage import save_file
 from app.db.models.media import Media
-from app.db.session import SessionLocal
+from app.db.session import SessionLocal, get_db
 
 router = APIRouter()
 
@@ -177,10 +178,11 @@ async def create_media(
 @router.get("/api/v1/media")
 async def get_media(
     filters: MediaFilterParams = Depends(),
-    current_user = Depends(get_current_user)
+    current_user = Depends(get_current_user),
+    db: Session = Depends(get_db)
 ):
     """
-    Retrieve media items with optional filtering by geolocation and time range.
+    Retrieve media items with filtering by geolocation (required) and optional time range.
     """
     # Extract user_id from current_user
     user_id = current_user.id
@@ -192,12 +194,6 @@ async def get_media(
         f"start_date={filters.start_date}, end_date={filters.end_date}"
     )
     
-    # Import Media model and database session
-    from app.db.models import Media
-    from app.db.session import SessionLocal
-    
-    # Create a database session
-    db = SessionLocal()
     try:
         # Extract filter parameters
         lat = filters.lat
@@ -210,8 +206,9 @@ async def get_media(
         logger.info("Attempting to query media records with provided filters")
         
         # Use the Media.filter() method to apply filters
-        query = Media.filter(
-            db=db,
+        # Note: Media.filter now returns a query object
+        media_query = Media.filter(
+            session=db,
             lat=lat,
             lng=lng,
             radius=radius,
@@ -220,7 +217,7 @@ async def get_media(
         )
         
         # Execute the query and get results
-        media_list = query.all()
+        media_list = media_query.all()
         
         # Log the number of results found
         logger.info(f"Successfully retrieved {len(media_list)} media records")
@@ -251,8 +248,6 @@ async def get_media(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to retrieve media records"
         )
-    finally:
-        db.close()
 
 
 @router.delete("/api/v1/media/{media_id}")
