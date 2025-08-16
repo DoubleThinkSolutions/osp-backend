@@ -6,7 +6,7 @@ authors = ["OSP Team"]
 
 [tool.poetry.dependencies]
 python = "^3.9"
-fastapi = "^0.85.0"
+fastapi = "^0.116.0"
 uvicorn = "^0.18.0"
 sqlalchemy = "^2.0.0"
 alembic = "^1.8.1"
@@ -18,11 +18,16 @@ python-dotenv = "^1.0.0"
 asyncpg = "^0.27.0"
 psycopg2-binary = "^2.9.0"
 pydantic-settings = "^2.0.0"
-
+httpx = "^0.23.0"
+google-auth = "^2.22.0"
+requests = "^2.28.1"
+geoalchemy2 = { version = "^0.17.1", extras = ["shapely"] }
+boto3 = "^1.35.0"
+google_auth_oauthlib = "^1.2.2"
+google_auth_httplib2 = "^0.2.0"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^7.0.0"
-httpx = "^0.23.0"
 
 [tool.poetry.scripts]
 test = "poetry run alembic upgrade head && pytest"

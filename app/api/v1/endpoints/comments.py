@@ -13,7 +13,7 @@ router = APIRouter()
 # Use the standard logger
 logger = logging.getLogger(__name__)
 
-@router.get("/api/v1/comments/{media_id}", response_model=List[CommentResponse])
+@router.get("/comments/{media_id}", response_model=List[CommentResponse])
 def get_comments(
     media_id: str,
     db: Session = Depends(get_db),
@@ -47,7 +47,7 @@ def get_comments(
         )
 
 
-@router.post("/api/v1/comments/{media_id}", status_code=status.HTTP_201_CREATED)
+@router.post("/comments/{media_id}", status_code=status.HTTP_201_CREATED)
 def create_comment(
     media_id: str,
     comment_data: CommentCreate,

@@ -1,105 +1,76 @@
+# app/services/storage.py
 import os
-import uuid
-from typing import Union
+import boto3
+from botocore.exceptions import ClientError
 import logging
 
-# Create logger instance
 logger = logging.getLogger("app.storage")
 
-# Constants
-MAX_FILE_SIZE = 100 * 1024 * 1024  # 100MB in bytes
-ALLOWED_CONTENT_TYPES = {
-    "image/jpeg": ".jpg",
-    "video/mp4": ".mp4"
+# Get config from environment variables
+S3_BUCKET_NAME = os.getenv("S3_BUCKET_NAME")
+AWS_REGION = os.getenv("AWS_REGION", "us-east-1")
+S3_ENDPOINT_URL = os.getenv("S3_ENDPOINT_URL") # This is None in production
+
+# --- Conditionally configure the S3 client ---
+s3_client_config = {
+    'region_name': AWS_REGION
 }
-STORAGE_DIR = "storage"
+# If an endpoint_url is provided (i.e., for MinIO in dev), add it to the config
+if S3_ENDPOINT_URL:
+    s3_client_config['endpoint_url'] = S3_ENDPOINT_URL
+
+# Initialize the S3 client with our flexible configuration
+s3_client = boto3.client("s3", **s3_client_config)
+
+
+def save_file(file_data: bytes, filename: str, content_type: str) -> str:
+    """
+    Save a file to the configured S3-compatible storage (AWS S3 or MinIO).
+    
+    Returns:
+        The public URL of the saved file.
+    """
+    if not S3_BUCKET_NAME:
+        logger.error("S3_BUCKET_NAME environment variable is not set.")
+        raise ValueError("Storage service is not configured.")
+
+    try:
+        s3_client.put_object(
+            Bucket=S3_BUCKET_NAME,
+            Key=filename,
+            Body=file_data,
+            ContentType=content_type
+        )
+        
+        # --- Construct the correct URL based on environment ---
+        if S3_ENDPOINT_URL:
+            # For MinIO, the URL is http://localhost:9000/bucket-name/filename
+            # We use localhost here because this URL will be accessed by the user's browser, not the backend container.
+            file_url = f"http://localhost:9000/{S3_BUCKET_NAME}/{filename}"
+        else:
+            # For AWS S3, use the standard AWS URL format
+            file_url = f"https://{S3_BUCKET_NAME}.s3.{AWS_REGION}.amazonaws.com/{filename}"
+        
+        logger.info(f"Successfully saved file to S3-compatible storage: {file_url}")
+        return file_url
+
+    except ClientError as e:
+        logger.error(f"Failed to upload file: {e}")
+        raise Exception("Failed to save file to storage.") from e
+
 
 def delete_file(filename: str) -> bool:
     """
-    Delete a file from the storage directory.
-    
-    Args:
-        filename: The name of the file to delete
-        
-    Returns:
-        True if file was successfully deleted or didn't exist, False if deletion failed
+    Delete a file from the S3-compatible storage.
     """
-    try:
-        # Construct full file path
-        file_path = os.path.join(STORAGE_DIR, filename)
+    if not S3_BUCKET_NAME:
+        logger.error("S3_BUCKET_NAME environment variable is not set.")
+        return False
         
-        # Check if file exists
-        if not os.path.exists(file_path):
-            logger.warning(f"Attempted to delete non-existent file: {filename}")
-            return True  # Idempotent behavior - return True if file doesn't exist
-            
-        # Attempt to delete the file
-        os.remove(file_path)
+    try:
+        s3_client.delete_object(Bucket=S3_BUCKET_NAME, Key=filename)
         logger.info(f"Successfully deleted file: {filename}")
         return True
-        
-    except OSError as e:
-        logger.error(f"Failed to delete file {filename}: {str(e)}")
+    except ClientError as e:
+        logger.error(f"Failed to delete file {filename}: {e}")
         return False
-    except Exception as e:
-        logger.error(f"Unexpected error while deleting file {filename}: {str(e)}")
-        return False
-
-def save_file(file_data: bytes, content_type: str, file_size: int) -> str:
-    """
-    Save a file to the storage directory with a UUID v4 filename.
-    
-    Args:
-        file_data: The raw bytes of the file to save
-        content_type: The MIME type of the file (e.g., "image/jpeg", "video/mp4")
-        file_size: The size of the file in bytes
-        
-    Returns:
-        The generated filename (including extension)
-        
-    Raises:
-        ValueError: If the content type is not allowed or file size exceeds limit
-        OSError: If there's an error writing the file to disk
-        Exception: For any other unexpected errors
-    """
-    # Validate content type
-    if content_type not in ALLOWED_CONTENT_TYPES:
-        error_msg = f"Unsupported content type: {content_type}. Allowed types: {list(ALLOWED_CONTENT_TYPES.keys())}"
-        logger.error(error_msg)
-        raise ValueError(error_msg)
-    
-    # Validate file size
-    if file_size > MAX_FILE_SIZE:
-        error_msg = f"File size {file_size} bytes exceeds maximum limit of {MAX_FILE_SIZE} bytes"
-        logger.error(error_msg)
-        raise ValueError(error_msg)
-    
-    try:
-        # Generate UUID v4 filename
-        file_uuid = str(uuid.uuid4())
-        file_extension = ALLOWED_CONTENT_TYPES[content_type]
-        filename = f"{file_uuid}{file_extension}"
-        
-        # Ensure storage directory exists
-        os.makedirs(STORAGE_DIR, exist_ok=True)
-        
-        # Construct file path
-        file_path = os.path.join(STORAGE_DIR, filename)
-        
-        # Write file data to disk
-        with open(file_path, "wb") as f:
-            f.write(file_data)
-        
-        # Log successful save
-        logger.info(f"Successfully saved file: {filename} ({file_size} bytes, type: {content_type})")
-        
-        return filename
-        
-    except OSError as e:
-        error_msg = f"Failed to write file to disk: {str(e)}"
-        logger.error(error_msg)
-        raise OSError(error_msg) from e
-    except Exception as e:
-        error_msg = f"Unexpected error while saving file: {str(e)}"
-        logger.error(error_msg)
-        raise Exception(error_msg) from e

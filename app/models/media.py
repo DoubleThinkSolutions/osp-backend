@@ -42,3 +42,18 @@ class MediaFilterParams(BaseModel):
         if radius is not None and lat is None:
             raise ValueError("lat must be provided when radius is specified")
         return values
+
+class MediaMetadata(BaseModel):
+    capture_time: datetime = Field(..., description="When the media was captured (timezone-aware)")
+    lat: float = Field(..., ge=-90, le=90, description="Latitude coordinate")
+    lng: float = Field(..., ge=-180, le=180, description="Longitude coordinate")
+    orientation: int = Field(0, ge=0, le=359, description="Orientation in degrees (0-359)")
+
+    @validator("capture_time", pre=True)
+    def check_timezone_aware(cls, v):
+        # Pydantic can automatically parse ISO 8601 strings to datetime objects
+        # We just need to ensure it's a valid string. The timezone will be handled.
+        if isinstance(v, str):
+            # This will raise a ValueError if the format is wrong, which Pydantic handles
+            return datetime.fromisoformat(v.replace("Z", "+00:00"))
+        return v

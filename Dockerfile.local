@@ -1,0 +1,58 @@
+# Use an official Python image
+FROM python:3.9-slim
+
+# Environment settings
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    POETRY_VERSION=1.8.3 \
+    POETRY_VENV_IN_PROJECT=1 \
+    POETRY_HOME="/opt/poetry" \
+    PATH="/app/.venv/bin:$PATH"
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    curl \
+    jq \
+    unzip \
+    wget \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Poetry system-wide
+RUN curl -sSL https://install.python-poetry.org | POETRY_HOME=$POETRY_HOME python3 - && \
+    ln -s $POETRY_HOME/bin/poetry /usr/local/bin/poetry && \
+    chmod +x /usr/local/bin/poetry
+
+# Install ngrok
+RUN wget https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-linux-amd64.tgz -O /tmp/ngrok.tgz && \
+    tar -xvzf /tmp/ngrok.tgz -C /usr/local/bin && \
+    rm /tmp/ngrok.tgz
+
+# Create non-root user
+RUN useradd --create-home --shell /bin/bash py
+
+# Switch to non-root user now (so venv is installed as py)
+USER py
+WORKDIR /app
+
+# Copy only dependency files first for caching
+COPY --chown=py:py pyproject.toml poetry.lock* ./
+
+# Install dependencies (main only for dev server)
+RUN poetry install --no-root --only main
+
+# Copy the rest of the project
+# In dev, these will be overridden by bind mount, so no need to chown
+COPY --chown=py:py . .
+
+# Make entrypoint executable
+RUN chmod +x /app/entrypoint.sh || true
+
+# Expose port
+EXPOSE 8000
+
+# Entrypoint
+ENTRYPOINT ["/app/entrypoint.sh"]
+
+# Default dev command
+CMD ["sh", "-c", "poetry run alembic upgrade head && poetry run uvicorn app.main:app --host 0.0.0.0 --port 8000"]

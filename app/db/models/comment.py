@@ -1,5 +1,5 @@
 from sqlalchemy import Column, Integer, String, Text, DateTime, func
-from app.db.base import Base
+from ..base import Base
 
 class Comment(Base):
     __tablename__ = 'comments'

@@ -16,7 +16,7 @@ class JWTBearer(HTTPBearer):
     def __init__(self, auto_error: bool = True):
         super().__init__(bearerFormat="JWT", auto_error=auto_error)
 
-    async def __call__(self, request: Request) -> HTTPAuthorizationCredentials | None:
+    async def __call__(self, request: Request) -> HTTPAuthorizationCredentials:
         try:
             credentials = await super().__call__(request)
             if credentials:
@@ -54,57 +54,50 @@ class JWTBearer(HTTPBearer):
                 detail={"error": "INVALID_AUTH_HEADER", "message": "Invalid authorization header"}
             )
 
-    
-
-
 async def get_current_user(
     credentials: HTTPAuthorizationCredentials = Security(JWTBearer())
 ) -> Dict[str, Any]:
     """
     Dependency that extracts and validates the JWT from the Authorization header,
     verifies it's an access token, checks user existence, and returns user context.
-
-    Raises appropriate HTTP exceptions for various failure cases.
-    Returns:
-        Dictionary containing userId, provider, and roles
     """
-    # Decode and verify the token
     try:
-        payload = decode_token(credentials.credentials)
-        if isinstance(payload, dict):
-            if not payload.get("success"):
-                error = payload.get("error")
-                if error == "TOKEN_EXPIRED":
-                    logger.warning('Token expired during authentication')
-                    raise HTTPException(
-                        status_code=status.HTTP_401_UNAUTHORIZED,
-                        detail={"error": "TOKEN_EXPIRED", "message": "Token has expired"}
-                    )
-                else:  # INVALID_TOKEN
-                    logger.warning('Invalid token during authentication')
-                    raise HTTPException(
-                        status_code=status.HTTP_401_UNAUTHORIZED,
-                        detail={"error": "INVALID_TOKEN", "message": "Invalid authentication token"}
-                    )
-        else:
-            logger.warning('Token decoding failed - invalid token format')
-            raise HTTPException(
+        decoded_data = decode_token(credentials.credentials)
+        
+        if not decoded_data.get("success"):
+            error = decoded_data.get("error")
+            if error == "TOKEN_EXPIRED":
+                logger.warning('Token expired during authentication')
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail={"error": "TOKEN_EXPIRED", "message": "Token has expired"}
+                )
+            else:  # INVALID_TOKEN
+                logger.warning('Invalid token during authentication')
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail={"error": "INVALID_TOKEN", "message": "Invalid authentication token"}
+                )
+
+        payload = decoded_data.get("payload")
+        if not payload:
+             logger.warning('Token decoding succeeded but payload is missing')
+             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
-                detail={"error": "INVALID_TOKEN", "message": "Invalid authentication token"}
+                detail={"error": "INVALID_TOKEN", "message": "Invalid token payload"}
             )
 
-        # Check token type
         token_type = payload.get('type')
         if token_type != 'access':
-            logger.warn(f'Invalid token type: {token_type}')
+            logger.warning(f'Invalid token type provided: {token_type}') # Improved logging
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
-                detail={"error": "INVALID_TOKEN", "message": "Invalid token type"}
+                detail={"error": "INVALID_TOKEN", "message": "Invalid token type, expected 'access'"}
             )
 
         user_id = payload.get('userId')
         if not user_id:
-            logger.warn('Token missing userId claim')
+            logger.warning('Token missing userId claim')
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail={"error": "INVALID_TOKEN", "message": "Invalid token: missing user ID"}
@@ -112,33 +105,25 @@ async def get_current_user(
 
         # Verify user still exists in database
         with UserService() as user_service:
-            try:
-                user = user_service.find_user_by_provider_id(
-                    provider=payload.get('provider'),
-                    provider_id=user_id
-                )
-                if not user:
-                    logger.warn(f'User not found for token userId: {user_id}')
-                    raise HTTPException(
-                        status_code=status.HTTP_401_UNAUTHORIZED,
-                        detail={"error": "INVALID_TOKEN", "message": "User associated with token does not exist"}
-                    )
-
-                user_context = {
-                    'userId': user_id,
-                    'provider': payload.get('provider'),
-                    'roles': payload.get('roles', ['user'])
-                }
-                
-                logger.info(f'Successfully authenticated user {user_id}')
-                return user_context
-                
-            except Exception as e:
-                logger.error(f'Error verifying user existence: {str(e)}')
+            user = user_service.find_user_by_provider_id(
+                provider=payload.get('provider'),
+                provider_id=user_id
+            )
+            if not user or not user.is_active:
+                logger.warning(f'User not found or inactive for token userId: {user_id}')
                 raise HTTPException(
                     status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail={"error": "INVALID_TOKEN", "message": "Failed to verify user credentials"}
+                    detail={"error": "INVALID_TOKEN", "message": "User associated with token does not exist or is inactive"}
                 )
+
+            user_context = {
+                'userId': user_id,
+                'provider': payload.get('provider'),
+                'roles': payload.get('roles', ['user'])
+            }
+            
+            logger.info(f'Successfully authenticated user {user_id} for {credentials.scheme} request')
+            return user_context
 
     except HTTPException:
         raise
@@ -146,7 +131,7 @@ async def get_current_user(
         logger.error(f'Unexpected error during token authentication: {str(e)}')
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Authentication failed"
+            detail="Authentication failed due to an unexpected error"
         )
 
 

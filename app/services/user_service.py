@@ -81,6 +81,24 @@ class UserService:
             logger.error(f"Error creating user: {e}")
             raise
 
+    def find_user_by_email(self, email: str) -> Optional[User]:
+        """Find a user by their email address.
+
+        Args:
+            email: The user's email address.
+
+        Returns:
+            The User object if found, None otherwise.
+        """
+        try:
+            if not email:
+                return None
+            user = self.db.query(User).filter(User.email == email).first()
+            return user
+        except Exception as e:
+            logger.error(f"Error finding user by email '{email}': {e}")
+            raise
+
     def delete_user(self, user_id: int) -> User:
         """Soft delete a user by deactivating their account.
         

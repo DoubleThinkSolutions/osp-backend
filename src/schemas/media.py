@@ -1,12 +1,13 @@
 from datetime import datetime
 from pydantic import BaseModel, validator
+from typing import Optional
 
 class MediaFilterParams(BaseModel):
     lat: float
     lng: float
     radius: float
-    start_date: datetime = None
-    end_date: datetime = None
+    start_date: Optional[datetime] = None
+    end_date: Optional[datetime] = None
 
     @validator('lat')
     def validate_latitude(cls, v):

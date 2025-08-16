@@ -20,7 +20,8 @@ if config.config_file_name is not None:
 
 # add your model's MetaData object here
 # for 'autogenerate' support
-from app.db.models import Base
+from app.db.base import Base
+from app.db.models import *
 target_metadata = Base.metadata
 
 # other values from the config, defined by the needs of env.py,
@@ -83,8 +84,7 @@ def run_migrations_online() -> None:
                 context.run_migrations()
         logger.info("Online database migration completed successfully.")
     except (OperationalError, ProgrammingError, IntegrityError, DataError) as e:
-        logger = logging.getLogger("alembic.env")
-        logger.error("Database error during migration: %s", e)
+        logger.error("Database error during migration: %s", e, exc_info=True)
         logger.error("Migration aborted due to database error.")
         sys.exit(1)
 

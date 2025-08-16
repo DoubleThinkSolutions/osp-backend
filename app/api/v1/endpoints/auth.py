@@ -1,4 +1,3 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Response
 from fastapi.security import OAuth2PasswordBearer
 from typing import Annotated
 import logging
@@ -12,8 +11,6 @@ from sqlalchemy.orm import Session
 import json
 from fastapi import Depends, HTTPException, Response, status, APIRouter
 from app.db.models import User
-from app.db.session import get_db
-from sqlalchemy.orm import Session
 from datetime import timedelta
 from typing import Dict
 
@@ -132,8 +129,14 @@ async def signin(
                 'name': claims.get('name', '')
             }
         elif request.provider == "google":
+            # Check if token is an ID token (JWT) or authorization code
             google_auth = GoogleAuth()
-            user_info = google_auth.verify_token(request.token)
+            if request.token.startswith('eyJ'):
+                # This looks like a JWT (ID token) - use existing logic
+                user_info = google_auth.verify_token(request.token)
+            else:
+                # This is an authorization code - exchange it for user info
+                user_info = await google_auth.exchange_google_code_for_token(request.token)
         else:
             raise HTTPException(
                 status_code=400,

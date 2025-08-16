@@ -4,34 +4,42 @@ from datetime import datetime, timezone
 from typing import Optional
 import logging
 import os
+from geoalchemy2.shape import to_shape
+import uuid
 
-from app.security.jwt import get_current_user
+from app.middleware.auth import get_current_user
 from app.core.logging import logger
 from src.schemas.media import MediaFilterParams
-from app.models.media import MediaCreateRequest
-from app.services.storage import save_file
+from app.models.media import MediaCreateRequest, MediaMetadata
+from app.services.storage import save_file, delete_file
 from app.db.models.media import Media
-from app.db.session import SessionLocal, get_db
+from app.db.session import SessionLocal, get_db, Session
 
 router = APIRouter()
 
-@router.post("/api/v1/media")
+@router.post("/media")
 async def create_media(
-    file: UploadFile = File(...),
-    capture_time: datetime = Form(...),
-    lat: float = Form(...),
-    lng: float = Form(...),
-    orientation: int = Form(0),
+    file: UploadFile = File(..., description="The media file to upload"),
+    metadata_str: str = Form(..., alias="metadata", description="A JSON string of the media metadata"),
     current_user = Depends(get_current_user)
 ):
     """
     Upload a new media file with metadata.
     """
     # Extract user_id from current_user
-    user_id = current_user.id
+    logger.debug(current_user)
+    user_id = current_user.get("userId")
     
     # Log the upload attempt
     logger.info(f"User {user_id} attempting media upload")
+    try:
+        metadata = MediaMetadata.parse_raw(metadata_str)
+    except ValidationError as e:
+        # If the JSON is malformed or missing fields, raise a 422
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=e.errors()
+        )
     
     # Validate content type
     if file.content_type not in ["image/jpeg", "video/mp4"]:
@@ -67,17 +75,17 @@ async def create_media(
     # Create request model instance for validation
     request = MediaCreateRequest(
         file=file,
-        capture_time=capture_time,
-        lat=lat,
-        lng=lng,
-        orientation=orientation
+        capture_time=metadata.capture_time,
+        lat=metadata.lat,
+        lng=metadata.lng,
+        orientation=metadata.orientation
     )
     
     # Set upload time to current UTC time
     upload_time = datetime.now(timezone.utc)
     
     # Calculate time difference in seconds
-    time_difference = (upload_time - capture_time).total_seconds()
+    time_difference = (upload_time - metadata.capture_time).total_seconds()
     
     # Calculate trust score using the formula: max(0, 100 - (difference_in_seconds / 60))
     trust_score = max(0, 100 - (time_difference / 60))
@@ -87,35 +95,20 @@ async def create_media(
     trust_score = max(0, min(100, trust_score))
     
     # Log the calculated trust score
-    logger.info(f"Trust score calculated: {trust_score} for capture time {capture_time}")
+    logger.info(f"Trust score calculated: {trust_score} for capture time {metadata.capture_time}")
     
-    # Save file using storage service
+    # Generate a unique filename
+    _, file_extension = os.path.splitext(file.filename)
+    unique_filename = f"{uuid.uuid4()}{file_extension}"
+
     try:
-        from app.services.storage import save_file
-        
         # Read file data
-        file.file.seek(0)
         file_data = await file.read()
-        file.file.seek(0)  # Reset pointer after reading
     
-        # Generate UUID v4 filename with original extension
-        import uuid
-        file_uuid = str(uuid.uuid4())
-        _, file_extension = os.path.splitext(file.filename)
-        if not file_extension:
-            # Fallback to content type mapping if no extension
-            content_type_extensions = {
-                "image/jpeg": ".jpg",
-                "video/mp4": ".mp4"
-            }
-            file_extension = content_type_extensions.get(file.content_type, "")
-        uuid_filename = f"{file_uuid}{file_extension}"
-    
-        # Save the file
-        saved_path = save_file(file_data, file.content_type, len(file_data))
+        # Save the file to S3 and get the URL
+        saved_url = save_file(file_data, unique_filename, file.content_type)
         
-        # Log success
-        logger.info(f"File saved at {saved_path}")
+        logger.info(f"File saved at {saved_url}")
         
     except Exception as e:
         logger.error(f"Failed to save file: {str(e)}")
@@ -124,33 +117,31 @@ async def create_media(
             detail="Failed to save file"
         )
     
-    # Import Media model
-    from app.db.models import Media
-    from app.db.session import SessionLocal
-    
     # Create database session
     db = SessionLocal()
     try:
         # Create media record in database
         media = Media.create(
             db=db,
-            capture_time=capture_time,
-            lat=lat,
-            lng=lng,
-            orientation=orientation,
+            capture_time=metadata.capture_time,
+            lat=metadata.lat,
+            lng=metadata.lng,
+            orientation=metadata.orientation,
             trust_score=trust_score,
             user_id=user_id,
-            file_path=saved_path
+            file_path=saved_url
         )
         # Log successful creation
         logger.info(f"Media record created with ID {media.id}")
         
+        location_point = to_shape(media.location)
+
         # Construct response data
         response_data = {
             "id": media.id,
             "capture_time": media.capture_time.isoformat(),
-            "lat": media.lat,
-            "lng": media.lng,
+            "lat": location_point.y,
+            "lng": location_point.x,
             "orientation": media.orientation,
             "trust_score": media.trust_score,
             "user_id": media.user_id,
@@ -174,83 +165,57 @@ async def create_media(
     finally:
         db.close()
 
-
-@router.get("/api/v1/media")
+@router.get("/media")
 async def get_media(
-    filters: MediaFilterParams = Depends(),
-    current_user = Depends(get_current_user),
+    filters: MediaFilterParams = Depends(), # This uses the Pydantic model
     db: Session = Depends(get_db)
 ):
     """
     Retrieve media items with filtering by geolocation (required) and optional time range.
     """
-    # Extract user_id from current_user
-    user_id = current_user.id
-    
-    # Log incoming request
     logger.info(
-        f"User {user_id} requesting media with filters: "
         f"lat={filters.lat}, lng={filters.lng}, radius={filters.radius}, "
         f"start_date={filters.start_date}, end_date={filters.end_date}"
     )
-    
+
     try:
-        # Extract filter parameters
-        lat = filters.lat
-        lng = filters.lng
-        radius = filters.radius
-        start_date = filters.start_date
-        end_date = filters.end_date
-        
-        # Log database query attempt
-        logger.info("Attempting to query media records with provided filters")
-        
-        # Use the Media.filter() method to apply filters
-        # Note: Media.filter now returns a query object
         media_query = Media.filter(
             session=db,
-            lat=lat,
-            lng=lng,
-            radius=radius,
-            start_date=start_date,
-            end_date=end_date
+            lat=filters.lat,
+            lng=filters.lng,
+            radius=filters.radius,
+            start_date=filters.start_date,
+            end_date=filters.end_date
         )
         
-        # Execute the query and get results
         media_list = media_query.all()
-        
-        # Log the number of results found
         logger.info(f"Successfully retrieved {len(media_list)} media records")
-        
-        # Convert results to response format
+
         response_media = []
         for media in media_list:
+            # Convert the WKBElement from the DB back to a Shapely Point
+            location_point = to_shape(media.location)
             response_media.append({
                 "id": media.id,
                 "capture_time": media.capture_time.isoformat(),
-                "lat": media.lat,
-                "lng": media.lng,
+                "lat": location_point.y,
+                "lng": location_point.x,
                 "orientation": media.orientation,
                 "trust_score": media.trust_score,
                 "user_id": media.user_id,
                 "file_path": media.file_path
             })
-        
-        # Return the filtered media list with count
+
         return {
-            "media": response_media,
-            "count": len(response_media)
+            "count": len(response_media),
+            "media": response_media
         }
-        
     except Exception as e:
-        logger.error(f"Failed to retrieve media records: {str(e)}", exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to retrieve media records"
-        )
+        logger.error(f"Failed to retrieve media records: {e}", exc_info=True)
+        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, "Failed to retrieve media records")
 
 
-@router.delete("/api/v1/media/{media_id}")
+@router.delete("/media/{media_id}")
 async def delete_media(
     media_id: str,
     current_user = Depends(get_current_user)
