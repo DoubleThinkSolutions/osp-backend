@@ -45,8 +45,6 @@ poetry.lock
 *.sqlite-journal
 
 # Docker
-Dockerfile
-docker-compose.yml
 docker-compose.override.yml
 docker/
 .dockerignore
