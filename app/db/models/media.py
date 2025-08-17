@@ -14,13 +14,15 @@ class Media(Base):
     user_id = Column(String)
     created_at = Column(DateTime(timezone=True), default=func.now())
     location = Column(Geography(geometry_type='POINT', srid=4326))
-    orientation = Column(Float)
+    orientation_azimuth = Column(Float)
+    orientation_pitch = Column(Float)
+    orientation_roll = Column(Float)
     trust_score = Column(Float)
     file_path = Column(String)
     capture_time = Column(DateTime(timezone=True))
 
     @classmethod
-    def create(cls, db, capture_time, lat, lng, orientation, trust_score, user_id, file_path):
+    def create(cls, db, capture_time, lat, lng, orientation_azimuth, orientation_pitch, orientation_roll, trust_score, user_id, file_path):
         """
         Create a new Media record in the database.
         
@@ -29,7 +31,9 @@ class Media(Base):
         - capture_time: DateTime when the media was captured
         - lat: Latitude coordinate
         - lng: Longitude coordinate
-        - orientation: Media orientation
+        - orientation_azimuth: Azimuth component of orientation
+        - orientation_pitch: Pitch component of orientation
+        - orientation_roll: Roll component of orientation
         - trust_score: Calculated trust score
         - user_id: ID of the user uploading the media
         - file_path: Path where the file is stored
@@ -51,7 +55,9 @@ class Media(Base):
             id=media_id,
             capture_time=capture_time,
             location=location_point,
-            orientation=orientation,
+            orientation_azimuth=orientation_azimuth,
+            orientation_pitch=orientation_pitch,
+            orientation_roll=orientation_roll,
             trust_score=trust_score,
             user_id=user_id,
             file_path=file_path

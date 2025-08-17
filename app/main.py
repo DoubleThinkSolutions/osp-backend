@@ -11,7 +11,8 @@ app = FastAPI(title="OSP Backend", version="0.1.0")
 # For development, you often need localhost.
 # You can use ["*"] to allow all origins, but it's more secure to be specific.
 origins = [
-    "http://localhost:8001"
+    "http://localhost:8001",
+    "https://osp.doublethinksolutions.com"
 ]
 
 app.add_middleware(

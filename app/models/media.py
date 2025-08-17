@@ -4,13 +4,17 @@ from typing import Optional
 from fastapi import UploadFile
 from pydantic import BaseModel, Field, validator, model_validator
 
+class OrientationVector(BaseModel):
+    azimuth: float = Field(..., description="Azimuth component of orientation.")
+    pitch: float = Field(..., description="Pitch component of orientation.")
+    roll: float = Field(..., description="Roll component of orientation.")
 
 class MediaCreateRequest(BaseModel):
     file: UploadFile = Field(..., description="The media file to upload")
     capture_time: datetime = Field(..., description="When the media was captured (timezone-aware)")
     lat: float = Field(..., ge=-90, le=90, description="Latitude coordinate")
     lng: float = Field(..., ge=-180, le=180, description="Longitude coordinate")
-    orientation: int = Field(0, ge=0, le=359, description="Orientation in degrees (0-359)")
+    orientation: OrientationVector = Field(..., description="Orientation vector (azimuth, pitch, roll)")
 
     @validator("capture_time")
     def check_timezone_aware(cls, v):
@@ -47,7 +51,7 @@ class MediaMetadata(BaseModel):
     capture_time: datetime = Field(..., description="When the media was captured (timezone-aware)")
     lat: float = Field(..., ge=-90, le=90, description="Latitude coordinate")
     lng: float = Field(..., ge=-180, le=180, description="Longitude coordinate")
-    orientation: int = Field(0, ge=0, le=359, description="Orientation in degrees (0-359)")
+    orientation: OrientationVector = Field(..., description="Orientation vector (azimuth, pitch, roll)")
 
     @validator("capture_time", pre=True)
     def check_timezone_aware(cls, v):

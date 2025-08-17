@@ -23,11 +23,6 @@ RUN curl -sSL https://install.python-poetry.org | POETRY_HOME=$POETRY_HOME pytho
     ln -s $POETRY_HOME/bin/poetry /usr/local/bin/poetry && \
     chmod +x /usr/local/bin/poetry
 
-# Install ngrok
-RUN wget https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-linux-amd64.tgz -O /tmp/ngrok.tgz && \
-    tar -xvzf /tmp/ngrok.tgz -C /usr/local/bin && \
-    rm /tmp/ngrok.tgz
-
 # Create non-root user
 RUN useradd --create-home --shell /bin/bash py
 
@@ -45,14 +40,8 @@ RUN poetry install --no-root --only main
 # In dev, these will be overridden by bind mount, so no need to chown
 COPY --chown=py:py . .
 
-# Make entrypoint executable
-RUN chmod +x /app/entrypoint.sh || true
-
 # Expose port
 EXPOSE 8000
-
-# Entrypoint
-ENTRYPOINT ["/app/entrypoint.sh"]
 
 # Default dev command
 CMD ["sh", "-c", "poetry run alembic upgrade head && poetry run uvicorn app.main:app --host 0.0.0.0 --port 8000"]

@@ -9,11 +9,13 @@ import uuid
 
 from app.middleware.auth import get_current_user
 from app.core.logging import logger
-from src.schemas.media import MediaFilterParams
 from app.models.media import MediaCreateRequest, MediaMetadata
 from app.services.storage import save_file, delete_file
 from app.db.models.media import Media
+from app.schemas.media import MediaFilterParams, MediaListResponse, Media as MediaSchema
 from app.db.session import SessionLocal, get_db, Session
+from app.services.trust import calculate_trust_score
+from app.core.config import settings
 
 router = APIRouter()
 
@@ -71,6 +73,10 @@ async def create_media(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Error processing file"
         )
+
+    # Set upload time to current UTC time
+    upload_time = datetime.now(timezone.utc)
+    trust_score = calculate_trust_score(metadata.capture_time, upload_time)
     
     # Create request model instance for validation
     request = MediaCreateRequest(
@@ -78,24 +84,9 @@ async def create_media(
         capture_time=metadata.capture_time,
         lat=metadata.lat,
         lng=metadata.lng,
-        orientation=metadata.orientation
+        orientation=metadata.orientation,
+        trust_score=trust_score
     )
-    
-    # Set upload time to current UTC time
-    upload_time = datetime.now(timezone.utc)
-    
-    # Calculate time difference in seconds
-    time_difference = (upload_time - metadata.capture_time).total_seconds()
-    
-    # Calculate trust score using the formula: max(0, 100 - (difference_in_seconds / 60))
-    trust_score = max(0, 100 - (time_difference / 60))
-    
-    # Ensure trust score is an integer between 0 and 100
-    trust_score = int(trust_score)
-    trust_score = max(0, min(100, trust_score))
-    
-    # Log the calculated trust score
-    logger.info(f"Trust score calculated: {trust_score} for capture time {metadata.capture_time}")
     
     # Generate a unique filename
     _, file_extension = os.path.splitext(file.filename)
@@ -104,11 +95,14 @@ async def create_media(
     try:
         # Read file data
         file_data = await file.read()
-    
-        # Save the file to S3 and get the URL
-        saved_url = save_file(file_data, unique_filename, file.content_type)
+
+        # The object key is the part we want to save
+        object_key = f"{settings.S3_BUCKET_NAME}/{unique_filename}"
+
+        # Save the file to S3
+        save_file(file_data, unique_filename, file.content_type)
         
-        logger.info(f"File saved at {saved_url}")
+        logger.info(f"File saved with key: {object_key}")
         
     except Exception as e:
         logger.error(f"Failed to save file: {str(e)}")
@@ -126,10 +120,12 @@ async def create_media(
             capture_time=metadata.capture_time,
             lat=metadata.lat,
             lng=metadata.lng,
-            orientation=metadata.orientation,
+            orientation_azimuth=metadata.orientation.azimuth,
+            orientation_pitch=metadata.orientation.pitch,
+            orientation_roll=metadata.orientation.roll,
             trust_score=trust_score,
             user_id=user_id,
-            file_path=saved_url
+            file_path=object_key
         )
         # Log successful creation
         logger.info(f"Media record created with ID {media.id}")
@@ -142,7 +138,11 @@ async def create_media(
             "capture_time": media.capture_time.isoformat(),
             "lat": location_point.y,
             "lng": location_point.x,
-            "orientation": media.orientation,
+            "orientation": {
+                "azimuth": media.orientation_azimuth,
+                "pitch": media.orientation_pitch,
+                "roll": media.orientation_roll
+            },
             "trust_score": media.trust_score,
             "user_id": media.user_id,
             "file_path": media.file_path
@@ -165,13 +165,13 @@ async def create_media(
     finally:
         db.close()
 
-@router.get("/media")
+@router.get("/media", response_model=MediaListResponse)
 async def get_media(
-    filters: MediaFilterParams = Depends(), # This uses the Pydantic model
+    filters: MediaFilterParams = Depends(),
     db: Session = Depends(get_db)
 ):
     """
-    Retrieve media items with filtering by geolocation (required) and optional time range.
+    Retrieve media items with filtering by geolocation and optional time range.
     """
     logger.info(
         f"lat={filters.lat}, lng={filters.lng}, radius={filters.radius}, "
@@ -191,25 +191,24 @@ async def get_media(
         media_list = media_query.all()
         logger.info(f"Successfully retrieved {len(media_list)} media records")
 
-        response_media = []
-        for media in media_list:
-            # Convert the WKBElement from the DB back to a Shapely Point
-            location_point = to_shape(media.location)
-            response_media.append({
-                "id": media.id,
-                "capture_time": media.capture_time.isoformat(),
-                "lat": location_point.y,
-                "lng": location_point.x,
-                "orientation": media.orientation,
-                "trust_score": media.trust_score,
-                "user_id": media.user_id,
-                "file_path": media.file_path
-            })
-
-        return {
-            "count": len(response_media),
-            "media": response_media
-        }
+        serialized_media = []
+        for media_item in media_list:
+            # Convert the location point to get lat/lng
+            location_point = to_shape(media_item.location)
+            
+            media_data = media_item.__dict__
+            
+            media_data['lat'] = location_point.y
+            media_data['lng'] = location_point.x
+            
+            media_schema = MediaSchema.model_validate(media_data)
+            
+            serialized_media.append(media_schema)
+        
+        return MediaListResponse(
+            count=len(serialized_media),
+            media=serialized_media
+        )
     except Exception as e:
         logger.error(f"Failed to retrieve media records: {e}", exc_info=True)
         raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, "Failed to retrieve media records")
@@ -239,12 +238,8 @@ async def delete_media(
             )
         
         # Check if the current user is the owner or an admin
-        if media.user_id != current_user.id and not current_user.is_superuser:
-            logger.warning(f"User {current_user.id} attempted to delete media {media_id} without permission")
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="You do not have permission to delete this media"
-            )
+        if media.user_id != user_id: # and not user_is_admin(): # Add admin check if needed
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Permission denied")
         
         # Proceed with deletion after permission check (handled at endpoint level)
         Media.delete(session=db, media_id=media_id)
@@ -252,11 +247,11 @@ async def delete_media(
         logger.info(f"Successfully deleted media {media_id}")
         return Response(status_code=status.HTTP_204_NO_CONTENT)
         
+    except ValueError as e:
+        # Catch specific errors from the delete method for better responses
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
     except Exception as e:
         logger.error(f"Unexpected error while deleting media {media_id}: {str(e)}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to delete media"
-        )
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to delete media")
     finally:
         db.close()
