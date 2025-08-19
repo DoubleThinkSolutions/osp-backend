@@ -1,9 +1,14 @@
+import cv2
+import numpy as np
+import tempfile
+
 from fastapi import APIRouter, Depends, Form, File, UploadFile, HTTPException, status
 from fastapi.responses import JSONResponse, Response
 from datetime import datetime, timezone
 from typing import Optional
 import logging
 import os
+import ffmpeg
 from geoalchemy2.shape import to_shape
 import uuid
 
@@ -18,6 +23,155 @@ from app.services.trust import calculate_trust_score
 from app.core.config import settings
 
 router = APIRouter()
+
+def reencode_video_for_web_compatibility(video_data: bytes) -> bytes:
+    """
+    Re-encodes a video to a web-compatible MP4 format (H.264 video, AAC audio).
+
+    This function takes raw video data, writes it to a temporary file,
+    and then uses FFmpeg to process it. It corrects potential issues like
+    unsupported audio codecs (e.g., AMR) and non-standard video settings.
+
+    Args:
+        video_data: The raw byte content of the video file.
+
+    Returns:
+        The raw byte content of the re-encoded video file.
+
+    Raises:
+        ffmpeg.Error: If the FFmpeg process fails.
+        Exception: For other file I/O errors.
+    """
+    input_temp_file = None
+    output_temp_file = None
+    try:
+        # Create a temporary file for the input video data
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as temp_in:
+            temp_in.write(video_data)
+            input_temp_file = temp_in.name
+
+        # Create a temporary file path for the output
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as temp_out:
+            output_temp_file = temp_out.name
+
+        logger.info(f"Starting re-encoding from {input_temp_file} to {output_temp_file}")
+
+        # Build and run the FFmpeg command
+        (
+            ffmpeg
+            .input(input_temp_file)
+            .output(
+                output_temp_file,
+                **{
+                    'c:v': 'libx264',        # Video codec: H.264 (highly compatible)
+                    'profile:v': 'main',     # H.264 profile for broad compatibility
+                    'pix_fmt': 'yuv420p',    # Standard pixel format for web video
+                    'c:a': 'aac',            # Audio codec: AAC (the web standard)
+                    'movflags': '+faststart' # Optimize for web streaming
+                }
+            )
+            .run(capture_stdout=True, capture_stderr=True, overwrite_output=True)
+        )
+        
+        logger.info("FFmpeg re-encoding successful.")
+
+        # Read the re-encoded data from the output file
+        with open(output_temp_file, 'rb') as f:
+            reencoded_data = f.read()
+        
+        return reencoded_data
+
+    except ffmpeg.Error as e:
+        logger.error("FFmpeg re-encoding failed.")
+        # The stderr from FFmpeg is very useful for debugging
+        logger.error(f"FFmpeg stdout: {e.stdout.decode('utf8')}")
+        logger.error(f"FFmpeg stderr: {e.stderr.decode('utf8')}")
+        raise  # Re-raise the exception to be handled by the endpoint
+    finally:
+        # --- Crucial Cleanup Step ---
+        # Ensure temporary files are deleted regardless of success or failure
+        if input_temp_file and os.path.exists(input_temp_file):
+            os.unlink(input_temp_file)
+            logger.debug(f"Cleaned up temp input file: {input_temp_file}")
+        if output_temp_file and os.path.exists(output_temp_file):
+            os.unlink(output_temp_file)
+            logger.debug(f"Cleaned up temp output file: {output_temp_file}")
+
+def generate_video_thumbnail(video_data: bytes, max_width: int = 640) -> Optional[bytes]:
+    """
+    Generates a JPEG thumbnail from the first frame of a video, preserving its
+    correct orientation and aspect ratio.
+
+    This function is rotation-aware, using ffprobe to detect rotation metadata
+    from mobile devices. It then rotates the frame and resizes it proportionally
+    without cropping, ensuring the thumbnail matches the video's intended view.
+    """
+    temp_video_path = None
+    cap = None
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as temp_video_file:
+            temp_video_file.write(video_data)
+            temp_video_path = temp_video_file.name
+
+        rotation = 0
+        try:
+            probe = ffmpeg.probe(temp_video_path)
+            video_stream = next((s for s in probe['streams'] if s['codec_type'] == 'video'), None)
+            
+            if video_stream and 'side_data_list' in video_stream:
+                for side_data in video_stream['side_data_list']:
+                    if side_data.get('side_data_type') == 'Display Matrix':
+                        if 'rotation' in side_data:
+                            rotation = int(side_data['rotation'])
+                            logger.info(f"Found rotation '{rotation}' in Display Matrix.")
+                            break
+            
+            if rotation == 0 and video_stream and 'tags' in video_stream:
+                if 'rotate' in video_stream['tags']:
+                    rotation = int(video_stream['tags']['rotate'])
+                    logger.info(f"Found rotation '{rotation}' in stream tags (fallback).")
+        except Exception as e:
+            logger.warning(f"Could not determine video rotation. Error: {e}")
+
+        cap = cv2.VideoCapture(temp_video_path)
+        if not cap.isOpened():
+            logger.error("Could not open video file for thumbnail generation.")
+            return None
+
+        success, frame = cap.read()
+        if not success:
+            logger.error("Could not read frame from video for thumbnail generation.")
+            return None
+
+        # --- Apply detected rotation ---
+        if rotation == 90:
+            frame = cv2.rotate(frame, cv2.ROTATE_90_COUNTERCLOCKWISE)
+        elif rotation == 180:
+            frame = cv2.rotate(frame, cv2.ROTATE_180)
+        elif rotation == 270 or rotation == -90:
+            frame = cv2.rotate(frame, cv2.ROTATE_90_CLOCKWISE)
+
+        h, w, _ = frame.shape
+        aspect_ratio = h / w
+        new_height = int(max_width * aspect_ratio)
+
+        resized_frame = cv2.resize(frame, (max_width, new_height), interpolation=cv2.INTER_AREA)
+
+        success, buffer = cv2.imencode('.jpg', resized_frame)
+        if not success:
+            logger.error("Failed to encode frame to JPEG for thumbnail.")
+            return None
+            
+        return buffer.tobytes()
+
+    except Exception as e:
+        logger.error(f"Error during thumbnail generation: {e}", exc_info=True)
+        return None
+    finally:
+        if cap is not None:
+            cap.release()
+        if temp_video_path and os.path.exists(temp_video_path):
+            os.unlink(temp_video_path)
 
 @router.post("/media")
 async def create_media(
@@ -89,19 +243,47 @@ async def create_media(
     )
     
     # Generate a unique filename
+    base_uuid = uuid.uuid4()
     _, file_extension = os.path.splitext(file.filename)
-    unique_filename = f"{uuid.uuid4()}{file_extension}"
+    unique_filename = f"{base_uuid}{file_extension}"
+
+    thumbnail_key = None
 
     try:
         # Read file data
         file_data = await file.read()
 
-        # The object key is the part we want to save
-        object_key = f"{settings.S3_BUCKET_NAME}/{unique_filename}"
+        if file.content_type == "video/mp4":
 
-        # Save the file to S3
+            try:
+                logger.info(f"Re-encoding video {unique_filename} for web compatibility...")
+                reencoded_file_data = reencode_video_for_web_compatibility(file_data)
+                
+                # If encoding is successful, replace the original file data
+                file_data = reencoded_file_data
+                logger.info("Video successfully re-encoded. New size: {len(file_data)} bytes.")
+
+            except Exception as e:
+                # If encoding fails, we should not proceed with the potentially broken file.
+                logger.error(f"Critical error during video re-encoding for {unique_filename}: {e}", exc_info=True)
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, 
+                    detail="Failed to process video file. It may be corrupted or in an unsupported format."
+                )
+
+            logger.info(f"Generating thumbnail for video {unique_filename}...")
+            thumbnail_data = generate_video_thumbnail(file_data)
+            if thumbnail_data:
+                thumbnail_filename = f"{base_uuid}_thumb.jpg"
+                save_file(thumbnail_data, thumbnail_filename, "image/jpeg")
+                thumbnail_key = f"{settings.S3_BUCKET_NAME}/{thumbnail_filename}"
+                logger.info(f"Thumbnail saved with key: {thumbnail_key}")
+            else:
+                logger.warning("Failed to generate thumbnail, proceeding without one.")
+
+        # Save the main file to S3
+        object_key = f"{settings.S3_BUCKET_NAME}/{unique_filename}"
         save_file(file_data, unique_filename, file.content_type)
-        
         logger.info(f"File saved with key: {object_key}")
         
     except Exception as e:
@@ -125,7 +307,8 @@ async def create_media(
             orientation_roll=metadata.orientation.roll,
             trust_score=trust_score,
             user_id=user_id,
-            file_path=object_key
+            file_path=object_key,
+            thumbnail_path=thumbnail_key
         )
         # Log successful creation
         logger.info(f"Media record created with ID {media.id}")
@@ -145,7 +328,8 @@ async def create_media(
             },
             "trust_score": media.trust_score,
             "user_id": media.user_id,
-            "file_path": media.file_path
+            "file_path": media.file_path,
+            "thumbnail_path": media.thumbnail_path
         }
         
         # Log successful upload
@@ -224,6 +408,7 @@ async def delete_media(
     Only the owner of the media item or an admin can delete it.
     """
     # Log the start of the deletion attempt
+    user_id = current_user.get("userId")
     logger.info(f"User {current_user.id} attempting to delete media {media_id}")
     
     db = SessionLocal()

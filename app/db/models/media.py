@@ -20,9 +20,10 @@ class Media(Base):
     trust_score = Column(Float)
     file_path = Column(String)
     capture_time = Column(DateTime(timezone=True))
+    thumbnail_path = Column(String, nullable=True)
 
     @classmethod
-    def create(cls, db, capture_time, lat, lng, orientation_azimuth, orientation_pitch, orientation_roll, trust_score, user_id, file_path):
+    def create(cls, db, capture_time, lat, lng, orientation_azimuth, orientation_pitch, orientation_roll, trust_score, user_id, file_path, thumbnail_path=None):
         """
         Create a new Media record in the database.
         
@@ -37,6 +38,7 @@ class Media(Base):
         - trust_score: Calculated trust score
         - user_id: ID of the user uploading the media
         - file_path: Path where the file is stored
+        - thumbnail_path: (Optional) Path where the thumbnail file is stored
         
         Returns:
         - Media: The created Media instance
@@ -60,7 +62,8 @@ class Media(Base):
             orientation_roll=orientation_roll,
             trust_score=trust_score,
             user_id=user_id,
-            file_path=file_path
+            file_path=file_path,
+            thumbnail_path=thumbnail_path
         )
         
         # Add to session and commit
@@ -106,17 +109,7 @@ class Media(Base):
     @classmethod
     def delete(cls, session, media_id: str) -> bool:
         """
-        Delete a media record and its associated file.
-        
-        Parameters:
-        - session: SQLAlchemy session object
-        - media_id: ID of the media to delete
-        
-        Returns:
-        - True if deletion was successful
-        
-        Raises:
-        - ValueError if media not found or storage deletion fails
+        Deletes a media record and its associated file(s) from storage.
         """
         from app.services.storage import delete_file
 
@@ -124,20 +117,33 @@ class Media(Base):
         if not media:
             raise ValueError("Media not found")
 
-        file_path = media.file_path
-        if file_path:
-            # Assuming file_path is a full URL like https://.../filename.jpg
-            filename = file_path.split('/')[-1]
-            if not delete_file(filename):
-                raise ValueError("Failed to delete file from storage")
-
+        # Get paths before deleting the record
+        file_path_to_delete = media.file_path
+        thumbnail_path_to_delete = media.thumbnail_path
+        
         try:
+            # Delete from database first within the transaction
             session.delete(media)
-            if file_path and not delete_file(file_path):
-                raise ValueError("Failed to delete file from storage")
+            
+            # Delete main file from storage
+            if file_path_to_delete:
+                filename = file_path_to_delete.split('/')[-1]
+                if not delete_file(filename):
+                    # Raise error to trigger a rollback
+                    raise ValueError(f"Failed to delete main file {filename} from storage.")
+
+            # Delete thumbnail from storage if it exists
+            if thumbnail_path_to_delete:
+                thumb_filename = thumbnail_path_to_delete.split('/')[-1]
+                if not delete_file(thumb_filename):
+                    # Raise error to trigger a rollback
+                    raise ValueError(f"Failed to delete thumbnail {thumb_filename} from storage.")
+            
+            # If all deletions succeed, commit the transaction
             session.commit()
         except Exception as e:
             session.rollback()
-            raise ValueError(f"Failed to delete media: {str(e)}")
+            logger.error(f"Failed to delete media {media_id} due to: {str(e)}")
+            raise e # Re-raise the exception to be handled by the endpoint
 
         return True

@@ -25,6 +25,9 @@ geoalchemy2 = { version = "^0.17.1", extras = ["shapely"] }
 boto3 = "^1.35.0"
 google_auth_oauthlib = "^1.2.2"
 google_auth_httplib2 = "^0.2.0"
+opencv-python-headless = "^4.10.0"
+numpy = "^1.26.0"
+ffmpeg-python = "^0.2.0"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^7.0.0"

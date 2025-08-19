@@ -46,6 +46,7 @@ class Media(BaseModel):
     user_id: str
     capture_time: datetime
     file_path: str 
+    thumbnail_path: Optional[str] = None
     trust_score: float
     lat: float
     lng: float
@@ -73,6 +74,17 @@ class Media(BaseModel):
         Dynamically constructs the full public URL for the media file.
         """
         return f"{settings.S3_PUBLIC_BASE_URL}/{self.file_path}"
+
+    @computed_field
+    @property
+    def thumbnail_url(self) -> Optional[str]:
+        """
+        Dynamically constructs the full public URL for the thumbnail, if it exists.
+        """
+        if not self.thumbnail_path:
+            return None
+        
+        return f"{settings.S3_PUBLIC_BASE_URL}/{self.thumbnail_path}"
 
     # This tells Pydantic to read data from SQLAlchemy model attributes
     model_config = ConfigDict(from_attributes=True)

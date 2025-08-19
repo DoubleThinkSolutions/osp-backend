@@ -6,8 +6,6 @@ services:
       context: .
       dockerfile: Dockerfile.local
     container_name: osp-backend
-    ports:
-      - "8000:8000"
     env_file:
       - .env
     # This now waits for the db service to be 'healthy'
@@ -49,9 +47,16 @@ services:
       - minio_data:/data
     environment:
       # These credentials are for the MinIO server itself
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
-    command: server /data --console-address ":9001"
+      - MINIO_ROOT_USER=${MINIO_ROOT_USER}
+      - MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD}
+      # Enable browser access and CORS for video streaming
+      - MINIO_BROWSER_REDIRECT_URL=https://storage.doublethinksolutions.com:9001
+      # Set region to avoid signature issues
+      - MINIO_REGION_NAME=us-east-1
+      # Disable certain features that can interfere with streaming
+      - MINIO_API_REQUESTS_MAX=1000
+      - MINIO_API_REQUESTS_DEADLINE=10s
+    command: server /data --console-address ":9001" --address ":9000"
     healthcheck:
       test:
         [
@@ -65,6 +70,7 @@ services:
       retries: 5
     restart: unless-stopped
 
+
   cloudflared:
     image: cloudflare/cloudflared:latest
     container_name: osp-cloudflared
@@ -72,6 +78,9 @@ services:
     environment:
       - TUNNEL_TOKEN=${CLOUDFLARE_TUNNEL_TOKEN}
     restart: unless-stopped
+    volumes:
+      - ./cloudflared/config.yml:/etc/cloudflared/config.yml:ro
+      - ./cloudflared/6479a824-1da2-4233-a281-0d369d6a9837.json:/etc/cloudflared/6479a824-1da2-4233-a281-0d369d6a9837.json:ro
     depends_on:
       - backend
 
