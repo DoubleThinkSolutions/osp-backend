@@ -8,13 +8,15 @@ from datetime import datetime, timezone
 from typing import Optional
 import logging
 import os
+
+from pydantic import ValidationError
 import ffmpeg
 from geoalchemy2.shape import to_shape
 import uuid
 
 from app.middleware.auth import get_current_user
 from app.core.logging import logger
-from app.models.media import MediaCreateRequest, MediaMetadata
+from app.models.media import MediaMetadata
 from app.services.storage import save_file, delete_file
 from app.db.models.media import Media
 from app.schemas.media import MediaFilterParams, MediaListResponse, Media as MediaSchema
@@ -178,7 +180,7 @@ def generate_video_thumbnail(video_data: bytes, max_width: int = 640) -> Optiona
 async def create_media(
     file: UploadFile = File(..., description="The media file to upload"),
     metadata_str: str = Form(..., alias="metadata", description="A JSON string of the media metadata"),
-    current_user = Depends(get_current_user)
+    current_user = Depends(get_current_user),
     signature: bytes = Form(..., description="The DER-encoded ECDSA signature"),
     public_key: bytes = Form(..., description="The DER-encoded SPKI public key"),
     media_hash: str = Form(..., description="The client-calculated hex hash of the media file"),
@@ -255,16 +257,6 @@ async def create_media(
     # Set upload time to current UTC time
     upload_time = datetime.now(timezone.utc)
     trust_score = calculate_trust_score(metadata.capture_time, upload_time)
-    
-    # Create request model instance for validation
-    request = MediaCreateRequest(
-        file=file,
-        capture_time=metadata.capture_time,
-        lat=metadata.lat,
-        lng=metadata.lng,
-        orientation=metadata.orientation,
-        trust_score=trust_score
-    )
     
     # Generate a unique filename
     base_uuid = uuid.uuid4()

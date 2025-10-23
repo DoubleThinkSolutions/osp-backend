@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Float, DateTime, func, and_, text, LargeBinary
+from sqlalchemy import Column, Integer, String, Float, DateTime, func, LargeBinary
 from datetime import datetime, timezone
 from geoalchemy2 import Geography
 import uuid
