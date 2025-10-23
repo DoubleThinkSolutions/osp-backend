@@ -20,39 +20,21 @@ class Media(Base):
     trust_score = Column(Float)
     file_path = Column(String)
     capture_time = Column(DateTime(timezone=True))
+
+    verification_status = Column(String, nullable=False, default="UNVERIFIED")
+    signature = Column(LargeBinary, nullable=True)
+    public_key = Column(LargeBinary, nullable=True)
+    client_media_hash = Column(String, nullable=True)
+    client_metadata_hash = Column(String, nullable=True)
     thumbnail_path = Column(String, nullable=True)
 
     @classmethod
-    def create(cls, db, capture_time, lat, lng, orientation_azimuth, orientation_pitch, orientation_roll, trust_score, user_id, file_path, thumbnail_path=None):
-        """
-        Create a new Media record in the database.
-        
-        Parameters:
-        - db: SQLAlchemy session object
-        - capture_time: DateTime when the media was captured
-        - lat: Latitude coordinate
-        - lng: Longitude coordinate
-        - orientation_azimuth: Azimuth component of orientation
-        - orientation_pitch: Pitch component of orientation
-        - orientation_roll: Roll component of orientation
-        - trust_score: Calculated trust score
-        - user_id: ID of the user uploading the media
-        - file_path: Path where the file is stored
-        - thumbnail_path: (Optional) Path where the thumbnail file is stored
-        
-        Returns:
-        - Media: The created Media instance
-        
-        Raises:
-        - Exception: If creation fails
-        """
-        # Generate UUID for the media ID
+    def create(cls, db, capture_time, lat, lng, orientation_azimuth, orientation_pitch, orientation_roll,
+               trust_score, user_id, file_path, verification_status, signature, public_key,
+               client_media_hash, client_metadata_hash, thumbnail_path=None):
         media_id = str(uuid.uuid4())
-
-        # PostGIS point in WKT format: longitude first, then latitude
         location_point = f'SRID=4326;POINT({lng} {lat})'
         
-        # Create new Media instance
         media = cls(
             id=media_id,
             capture_time=capture_time,
@@ -63,14 +45,18 @@ class Media(Base):
             trust_score=trust_score,
             user_id=user_id,
             file_path=file_path,
-            thumbnail_path=thumbnail_path
+            thumbnail_path=thumbnail_path,
+            verification_status=verification_status,
+            signature=signature,
+            public_key=public_key,
+            client_media_hash=client_media_hash,
+            client_metadata_hash=client_metadata_hash
         )
         
-        # Add to session and commit
         try:
             db.add(media)
             db.commit()
-            db.refresh(media)  # Refresh to get any database-generated values
+            db.refresh(media)
             return media
         except Exception as e:
             db.rollback()

@@ -50,6 +50,7 @@ class Media(BaseModel):
     trust_score: float
     lat: float
     lng: float
+    verification_status: str
 
     orientation_azimuth: float = Field(exclude=True)
     orientation_pitch: float = Field(exclude=True)

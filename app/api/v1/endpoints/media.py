@@ -21,6 +21,7 @@ from app.schemas.media import MediaFilterParams, MediaListResponse, Media as Med
 from app.db.session import SessionLocal, get_db, Session
 from app.services.trust import calculate_trust_score
 from app.core.config import settings
+from app.services.verification import verify_signature
 
 router = APIRouter()
 
@@ -178,6 +179,11 @@ async def create_media(
     file: UploadFile = File(..., description="The media file to upload"),
     metadata_str: str = Form(..., alias="metadata", description="A JSON string of the media metadata"),
     current_user = Depends(get_current_user)
+    signature: bytes = Form(..., description="The DER-encoded ECDSA signature"),
+    public_key: bytes = Form(..., description="The DER-encoded SPKI public key"),
+    media_hash: str = Form(..., description="The client-calculated hex hash of the media file"),
+    metadata_hash: str = Form(..., description="The client-calculated hex hash of the metadata"),
+    db: Session = Depends(get_db)
 ):
     """
     Upload a new media file with metadata.
@@ -187,7 +193,7 @@ async def create_media(
     user_id = current_user.get("userId")
     
     # Log the upload attempt
-    logger.info(f"User {user_id} attempting media upload")
+    logger.info(f"User {user_id} attempting signed media upload for {file.filename}")
     try:
         metadata = MediaMetadata.parse_raw(metadata_str)
     except ValidationError as e:
@@ -227,6 +233,24 @@ async def create_media(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Error processing file"
         )
+
+    verification_result = await verify_signature(
+        file=file,
+        metadata_str=metadata_str,
+        client_media_hash_hex=media_hash,
+        client_metadata_hash_hex=metadata_hash,
+        signature_bytes=signature,
+        public_key_bytes=public_key
+    )
+
+    if not verification_result.is_valid:
+        logger.warning(f"Verification failed for {file.filename}: {verification_result.status_message}")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Verification failed: {verification_result.status_message}")
+
+    try:
+        metadata = MediaMetadata.parse_raw(metadata_str)
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid metadata format.")
 
     # Set upload time to current UTC time
     upload_time = datetime.now(timezone.utc)
@@ -308,7 +332,12 @@ async def create_media(
             trust_score=trust_score,
             user_id=user_id,
             file_path=object_key,
-            thumbnail_path=thumbnail_key
+            thumbnail_path=thumbnail_key,
+            verification_status=verification_result.status_message,
+            signature=signature,
+            public_key=public_key,
+            client_media_hash=media_hash,
+            client_metadata_hash=metadata_hash
         )
         # Log successful creation
         logger.info(f"Media record created with ID {media.id}")
@@ -329,6 +358,7 @@ async def create_media(
             "trust_score": media.trust_score,
             "user_id": media.user_id,
             "file_path": media.file_path,
+            "verification_status": media.verification_status,
             "thumbnail_path": media.thumbnail_path
         }
         
