@@ -185,7 +185,7 @@ async def create_media(
     public_key: bytes = Form(..., description="The DER-encoded SPKI public key"),
     media_hash: str = Form(..., description="The client-calculated hex hash of the media file"),
     metadata_hash: str = Form(..., description="The client-calculated hex hash of the metadata"),
-    attestation_chain_str: str = Form(..., description="The attestation retrieved from the device"),
+    attestation_chain_str: Optional[str] = Form(None, description="The attestation retrieved from the device"),
     db: Session = Depends(get_db)
 ):
     """
