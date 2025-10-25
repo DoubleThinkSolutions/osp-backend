@@ -185,6 +185,7 @@ async def create_media(
     public_key: bytes = Form(..., description="The DER-encoded SPKI public key"),
     media_hash: str = Form(..., description="The client-calculated hex hash of the media file"),
     metadata_hash: str = Form(..., description="The client-calculated hex hash of the metadata"),
+    attestation_chain_str: str = Form(..., description="The attestation retrieved from the device"),
     db: Session = Depends(get_db)
 ):
     """
@@ -242,7 +243,8 @@ async def create_media(
         client_media_hash_hex=media_hash,
         client_metadata_hash_hex=metadata_hash,
         signature_bytes=signature,
-        public_key_bytes=public_key
+        public_key_bytes=public_key,
+        attestation_chain_str=attestation_chain_str
     )
 
     if not verification_result.is_valid:

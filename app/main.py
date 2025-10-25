@@ -1,11 +1,37 @@
 from fastapi import FastAPI
+import asyncio
+from contextlib import asynccontextmanager
 from fastapi.middleware.cors import CORSMiddleware
 from app.api.v1.endpoints.auth import router as auth_router
 from app.api.v1.endpoints.media import router as media_router
 from app.api.v1.endpoints.comments import router as comments_router
 from app.api.v1.endpoints.users import router as users_router
+from app.services import verification
 
-app = FastAPI(title="OSP Backend", version="0.1.0")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # --- Code to run on startup ---
+    print("Application startup...")
+    
+    # 1. Load initial attestation roots from the local cache
+    verification.load_roots_from_cache()
+    
+    # 2. Start the background task to periodically refresh the roots
+    #    We run the first update immediately in the background.
+    print("Starting background task for attestation root updates...")
+    update_task = asyncio.create_task(verification.periodic_root_update_task())
+
+    yield # --- The application is now running ---
+
+    # --- Code to run on shutdown ---
+    print("Application shutdown...")
+    update_task.cancel()
+    try:
+        await update_task
+    except asyncio.CancelledError:
+        print("Attestation root update task cancelled successfully.")
+
+app = FastAPI(title="OSP Backend", version="0.1.0", lifespan=lifespan)
 
 # Define the list of origins that are allowed to make requests.
 # For development, you often need localhost.

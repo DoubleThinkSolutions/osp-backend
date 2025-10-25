@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Float, DateTime, func, LargeBinary
+from sqlalchemy import Column, Integer, String, Float, DateTime, func, LargeBinary, Text
 from datetime import datetime, timezone
 from geoalchemy2 import Geography
 import uuid
@@ -27,11 +27,12 @@ class Media(Base):
     client_media_hash = Column(String, nullable=True)
     client_metadata_hash = Column(String, nullable=True)
     thumbnail_path = Column(String, nullable=True)
+    attestation_chain = Column(Text, nullable=True)
 
     @classmethod
     def create(cls, db, capture_time, lat, lng, orientation_azimuth, orientation_pitch, orientation_roll,
                trust_score, user_id, file_path, verification_status, signature, public_key,
-               client_media_hash, client_metadata_hash, thumbnail_path=None):
+               client_media_hash, client_metadata_hash, thumbnail_path=None, attestation_chain=None):
         media_id = str(uuid.uuid4())
         location_point = f'SRID=4326;POINT({lng} {lat})'
         
@@ -50,7 +51,8 @@ class Media(Base):
             signature=signature,
             public_key=public_key,
             client_media_hash=client_media_hash,
-            client_metadata_hash=client_metadata_hash
+            client_metadata_hash=client_metadata_hash,
+            attestation_chain=attestation_chain
         )
         
         try:
