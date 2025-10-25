@@ -101,112 +101,88 @@ async def signin(
     """
     Unified authentication endpoint for Apple and Google sign-in.
 
-    Args:
-        request: SignInRequest containing provider and token
-        db: Database session
-
-    Returns:
-        SignInResponse containing JWT token
-
-    Raises:
-        HTTPException: 401 for invalid tokens
-        HTTPException: 403 for account conflicts (ACCOUNT_EXISTS, DELETION_IN_PROGRESS)
-        HTTPException: 500 for unexpected server errors
+    Handles provider ID refresh (e.g., device reset, reissued sub) safely by
+    updating the stored provider_id when the verified email matches.
     """
     try:
+        # --- 1. Verify the incoming token and extract user info ---
         if request.provider == "apple":
-            # Extract ID token for Apple verification
             id_token = request.token
-            
-            # Verify Apple ID token - this will raise HTTPException if invalid
-            client_id = "com.osp.mobile"  # This should match your app's bundle ID
+            client_id = "com.osp.mobile"
             claims = await verify_apple_id_token(id_token, client_id)
-                
-            # Extract user information from claims
             user_info = {
-                'provider_id': claims['sub'],
-                'email': claims.get('email'),
-                'name': claims.get('name', '')
+                "provider_id": claims["sub"],
+                "email": claims.get("email"),
+                "name": claims.get("name", "")
             }
         elif request.provider == "google":
-            # Check if token is an ID token (JWT) or authorization code
             google_auth = GoogleAuth()
-            if request.token.startswith('eyJ'):
-                # This looks like a JWT (ID token) - use existing logic
+            if request.token.startswith("eyJ"):
                 user_info = google_auth.verify_token(request.token)
             else:
-                # This is an authorization code - exchange it for user info
                 user_info = await google_auth.exchange_google_code_for_token(request.token)
         else:
-            raise HTTPException(
-                status_code=400,
-                detail="Invalid provider"
-            )
-        
-        # Use UserService to find or create user
-        user_service = UserService(db)
-        
-        # First, try to find existing user by provider_id
-        user = user_service.find_user_by_provider_id(request.provider, user_info['provider_id'])
-        
-        # If user exists, check if account is in deletion state
-        if user and not user.is_active:
-            logger.warning(f"Account inactive for user {user.id} attempting sign-in")
-            raise HTTPException(
-                status_code=403,
-                detail="DELETION_IN_PROGRESS"
-            )
-        else:
-            # User doesn't exist, check if email is already associated with another account
-            if user_info.get('email'):
-                existing_user = user_service.find_user_by_email(user_info['email'])
-                if existing_user:
-                    # Check if this existing user is already being deleted
-                    if not existing_user.is_active:
-                        logger.warning(f"Account inactive for user {existing_user.id} with email {user_info['email']} during sign-in")
-                        raise HTTPException(
-                            status_code=403,
-                            detail="DELETION_IN_PROGRESS"
-                        )
-                    # Otherwise, the email is already associated with another account
-                    logger.warning(f"Sign-in attempt with existing email {user_info['email']} but different provider ID")
-                    raise HTTPException(
-                        status_code=403,
-                        detail="ACCOUNT_EXISTS"
-                    )
-            
-            # Create new user since no conflicts found
-            # Generate username from email if available
-            username = None
-            if user_info.get('email'):
-                username = user_info['email'].split('@')[0]
-                
-            user_data = {
-                'provider': request.provider,
-                'provider_id': user_info['provider_id'],
-                'email': user_info.get('email'),
-                'username': username,
-                'full_name': user_info.get('name') or None
-            }
-            user = user_service.create_user(user_data)
-        
-        # Close the UserService session
-        user_service.close()
+            raise HTTPException(status_code=400, detail="Invalid provider")
 
-        # Create JWT token using provider_id (external ID) instead of internal DB ID
+        user_service = UserService(db)
+
+        # --- 2. Try to find user by provider_id ---
+        user = user_service.find_user_by_provider_id(request.provider, user_info["provider_id"])
+
+        # --- 3. Handle user found by provider_id ---
+        if user:
+            if not user.is_active:
+                raise HTTPException(status_code=403, detail="DELETION_IN_PROGRESS")
+
+        # --- 4. No match by provider_id, check if email matches another account ---
+        else:
+            existing_user = None
+            if user_info.get("email"):
+                existing_user = user_service.find_user_by_email(user_info["email"])
+
+            if existing_user:
+                if not existing_user.is_active:
+                    raise HTTPException(status_code=403, detail="DELETION_IN_PROGRESS")
+
+                if existing_user.provider == request.provider:
+                    # Provider ID refresh case
+                    logger.info(
+                        f"Provider ID mismatch detected for {request.provider}:{user_info['email']} "
+                        f"— updating provider_id from {existing_user.provider_id} → {user_info['provider_id']}"
+                    )
+                    existing_user.provider_id = user_info["provider_id"]
+                    db.commit()
+                    user = existing_user
+                else:
+                    # Email is used by another provider (real conflict)
+                    raise HTTPException(status_code=403, detail="ACCOUNT_EXISTS")
+            else:
+                # --- 5. No existing email or provider match — create new user ---
+                username = user_info["email"].split("@")[0] if user_info.get("email") else None
+                user_data = {
+                    "provider": request.provider,
+                    "provider_id": user_info["provider_id"],
+                    "email": user_info.get("email"),
+                    "username": username,
+                    "full_name": user_info.get("name") or None,
+                }
+                user = user_service.create_user(user_data)
+
+        # --- 6. Create and return tokens ---
+        user_service.close()
         access_token = create_access_token(
-            user_id=user_info['provider_id'],
+            user_id=user.provider_id,
             provider=request.provider,
             roles=["user"],
-            expires_in=900  # 15 minutes in seconds
+            expires_in=900
         )
         refresh_token = create_refresh_token(
-            user_id=user_info['provider_id'],
+            user_id=user.provider_id,
             provider=request.provider,
             roles=["user"],
-            expires_in=604800  # 7 days in seconds
+            expires_in=604800
         )
-        
+
         logger.info(f"Successful {request.provider} sign-in for user {user.id}")
         return SignInResponse(
             access_token=access_token,
@@ -215,11 +191,7 @@ async def signin(
         )
 
     except HTTPException:
-        # Re-raise HTTPExceptions that are already properly formed
         raise
     except Exception as e:
         logger.error(f"Unexpected error during sign-in: {str(e)}")
-        raise HTTPException(
-            status_code=500,
-            detail="An unexpected error occurred during sign-in"
-        )
+        raise HTTPException(status_code=500, detail="An unexpected error occurred during sign-in")
